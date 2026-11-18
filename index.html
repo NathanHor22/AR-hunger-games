@@ -3,234 +3,144 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f5eedb">
+  <meta name="theme-color" content="#1c1535">
   <meta name="description" content="Host or join a local multiplayer AR tomato fight. Scan the room code, aim your camera, and swipe to throw.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Cellipse cx=%2716%27 cy=%2719%27 rx=%2714%27 ry=%2711%27 fill=%27%23ec472e%27/%3E%3Cpath d=%27M16 12 5 8l8 1 3-8 1 8 9-4-5 7z%27 fill=%27%23295136%27/%3E%3C/svg%3E">
   <title>Tomato Riot · AR food fight</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/menu.css">
+  <link rel="stylesheet" href="/lobby.css">
+  <link rel="stylesheet" href="/round.css">
 </head>
 <body data-screen="entry">
   <video id="video" autoplay muted playsinline aria-label="Camera preview"></video>
   <header class="masthead">
     <div class="masthead-inner">
-      <div class="brand"><i class="tomato-mark" aria-hidden="true"></i>Tomato Riot</div>
-      <span class="edition"><i class="signal" aria-hidden="true"></i> Local multiplayer</span>
-      <button id="leave" class="ink-button small-button" type="button">Leave room <span aria-hidden="true">↗</span></button>
+      <canvas id="roomBrand" width="246" height="126" role="img" aria-label="Tomato Riot"></canvas>
+      <button id="leave" class="leave-key" type="button"><i aria-hidden="true"></i>Leave room</button>
     </div>
   </header>
 
   <main>
-    <section id="entry" class="screen page" aria-labelledby="gameTitle">
-      <div class="entry-spread">
-        <div class="poster">
-          <div class="poster-field" aria-hidden="true"></div>
-          <div class="poster-kicker">AR food fight</div>
-          <h1 class="poster-title" id="gameTitle"><span>Tomato</span> <em>Riot!</em></h1>
-          <canvas class="mascot" width="960" height="816" aria-hidden="true"></canvas>
-          <div class="poster-facts">
-            <span><i class="people-icon" aria-hidden="true"></i>2–8 players</span>
-            <span><i class="timer-icon" aria-hidden="true"></i>90 sec rounds</span>
-          </div>
+    <section id="entry" class="screen title-screen" aria-labelledby="gameTitle">
+      <div class="arcade-frame">
+        <div class="arcade-sky" aria-hidden="true"><i></i><i></i><i></i></div>
+        <canvas id="menuCity" width="480" height="85" aria-hidden="true"></canvas>
+        <div class="arcade-top">
+          <span class="local-mode"><i aria-hidden="true"></i> Local multiplayer</span>
+          <button id="openHelp" type="button" class="help-key" aria-label="How to play" title="How to play">?</button>
         </div>
-
-        <div class="ticket entry-ticket">
-          <div class="ticket-heading">
-            <span class="ticket-icon crosshair" aria-hidden="true"></span>
-            <h2>Play a round</h2>
+        <div class="title-lockup">
+          <h1 id="gameTitle"><span class="menu-sr">Tomato Riot!</span><canvas id="menuTitle" width="246" height="126" aria-hidden="true"></canvas></h1>
+          <span class="fight-ribbon">AR food fight</span>
+        </div>
+        <button type="button" class="menu-flight mascot-stage mascot-trigger" aria-label="Make the mascot throw a tomato"><canvas id="menuHero" width="240" height="160" aria-hidden="true"></canvas></button>
+        <div class="game-deck">
+          <div class="match-facts"><span><i class="players-glyph" aria-hidden="true"></i> 2–8 players</span><span><i class="time-glyph" aria-hidden="true"></i> 90 sec rounds</span></div>
+          <div class="action-bank">
+            <button id="createRoom" class="arcade-key host-key" type="button"><span class="key-face"><i class="key-cursor" aria-hidden="true"></i>Host a room <i class="key-arrow" aria-hidden="true"></i></span><i class="loose-seeds" aria-hidden="true"></i></button>
+            <details class="code-drawer" id="codeDrawer">
+              <summary class="arcade-key code-key"><span class="key-face"><i class="code-glyph" aria-hidden="true"></i>Join with code <i class="fold-glyph" aria-hidden="true"></i></span><i class="loose-seeds" aria-hidden="true"></i></summary>
+              <form id="joinForm" class="code-slot">
+                <label for="joinCode">Room code</label>
+                <div><input id="joinCode" name="room" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required placeholder="000000" title="Enter the six-digit room code" autocomplete="off" spellcheck="false"><button type="submit">Join <span aria-hidden="true">↗</span></button></div>
+              </form>
+            </details>
           </div>
-          <p class="lede">Get your friends in the same space and turn your cameras into tomato launchers.</p>
-          <label class="field-label" for="nickname">Nickname <span>Optional</span></label>
-          <input id="nickname" name="nickname" type="text" placeholder="Your name" maxlength="24" autocomplete="nickname">
-          <div class="entry-actions">
-            <button id="createRoom" class="ink-button action primary" type="button">Create a room <span class="action-arrow" aria-hidden="true">↗</span></button>
-            <p class="or-rule">or join a room</p>
-            <form id="joinForm">
-              <label class="field-label" for="joinCode">Room code</label>
-              <div class="join-line">
-                <input id="joinCode" name="room" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required placeholder="6-digit code" title="Enter the six-digit room code" autocomplete="off" spellcheck="false">
-                <button class="ink-button action join-button" type="submit">Join <span aria-hidden="true">→</span></button>
-              </div>
-            </form>
-          </div>
+          <label class="player-tag" for="nickname"><i aria-hidden="true"></i><span>Player name</span><input id="nickname" name="nickname" type="text" placeholder="Auto-assign" maxlength="24" autocomplete="nickname"></label>
         </div>
       </div>
-
-      <div class="how-to">
-        <h2>How to play</h2>
+      <dialog id="menuHelp" class="menu-help" aria-labelledby="helpTitle">
+        <form method="dialog"><button class="help-close" aria-label="Close instructions">×</button></form>
+        <h2 id="helpTitle">How to play</h2>
         <ol>
-          <li><i class="guide-icon scan-icon" aria-hidden="true"></i><div><strong>Scan in</strong><p>Share the room QR or code.</p></div></li>
-          <li><i class="guide-icon aim-icon" aria-hidden="true"></i><div><strong>Line up a shot</strong><p>Point your camera at a rival.</p></div></li>
-          <li><i class="guide-icon throw-icon" aria-hidden="true"></i><div><strong>Swipe to throw</strong><p>Swipe up from the Launch button.</p></div></li>
+          <li><strong>Gather your crew</strong>Host a room, then have friends scan its QR. Allow camera access so the game can track players.</li>
+          <li><strong>Flick a tomato</strong>Point your camera at a rival. Swipe up from Launch to throw.</li>
+          <li><strong>Stay in the fight</strong>Ten hits knock a player out. Check the leaderboard when the round ends.</li>
         </ol>
-      </div>
+      </dialog>
     </section>
 
-    <section id="lobby" class="screen page" aria-labelledby="lobbyTitle">
-      <div class="section-title"><span class="tomato-mark" aria-hidden="true"></span><h1 id="lobbyTitle">Room lobby</h1></div>
-      <div class="lobby-spread">
-        <div class="invite-print">
-          <h2>Scan to join</h2>
-          <div class="qr-paper"><canvas id="inviteQr" width="224" height="224" role="img" aria-label="Scan to join this room, or enter the room code below"></canvas></div>
-          <p id="inviteReachability" hidden>For phone play, open the host page at a shared HTTPS address before sharing its QR.</p>
-          <div class="code-label">Room code</div>
-          <strong id="roomCode" class="room-code">—</strong>
-          <button id="copyInvite" class="ink-button action yellow" type="button">Copy invite link <span aria-hidden="true">↗</span></button>
-        </div>
-        <div class="ticket staging">
-          <div class="ticket-heading"><span class="ticket-icon people-icon" aria-hidden="true"></span><h2>Players</h2></div>
-          <ul id="roster" class="players" aria-label="Players in the room"></ul>
-          <div class="camera-check">
-            <h3>Camera check</h3>
-            <p id="cameraStatus" role="status">Checking camera access…</p>
-            <button id="retryCamera" class="ink-button small-button" type="button">Retry camera <span aria-hidden="true">↻</span></button>
+    <section id="lobby" class="screen room-shell" aria-labelledby="lobbyTitle">
+      <div class="lobby-banner">
+        <canvas class="lobby-city" width="480" height="85" aria-hidden="true"></canvas>
+        <h1 class="room-heading" id="lobbyTitle">Room lobby</h1>
+        <div class="mascot-stage" aria-hidden="true"><canvas width="240" height="160"></canvas></div>
+      </div>
+      <div class="lobby-floor">
+        <section class="invite-print" aria-labelledby="inviteHeading">
+          <h2 id="inviteHeading">Scan to join</h2>
+          <div class="invite-board">
+            <div class="qr-window">
+              <canvas id="inviteQr" width="248" height="248" role="img" aria-label="Scan to join this room, or enter the room code beside it"></canvas>
+            </div>
+            <div class="invite-stub">
+              <span class="section-label">Room code</span>
+              <strong id="roomCode">—</strong>
+              <button id="copyInvite" class="game-key sub-key" type="button">Copy invite link</button>
+            </div>
           </div>
-          <button id="startRound" class="ink-button action primary" type="button" disabled>Start round <span class="action-arrow" aria-hidden="true">↗</span></button>
+          <p id="inviteReachability" hidden>For phone play, open the host page at a shared HTTPS address before sharing its QR.</p>
+        </section>
+        <section class="lobby-team" aria-labelledby="playersHeading">
+          <div class="roster-heading">
+            <h2 id="playersHeading">Players</h2>
+            <span id="rosterCount" title="Connected players"></span>
+          </div>
+          <ul id="roster" aria-label="Players in the room"></ul>
+          <div class="camera-setup">
+            <h3 class="section-label"><i aria-hidden="true"></i>Camera check</h3>
+            <p id="cameraStatus" role="status">Checking camera access…</p>
+            <button id="retryCamera" class="game-key sub-key" type="button">Retry camera</button>
+          </div>
+        </section>
+        <div class="start-dock">
+          <p id="lobbyStatus" role="status"></p>
+          <button id="startRound" class="game-key" type="button" disabled>Start round <span aria-hidden="true">→</span></button>
         </div>
       </div>
     </section>
 
     <section id="arena" class="screen" aria-label="Live tomato fight">
       <canvas id="overlay" aria-hidden="true"></canvas>
-      <dl class="hud">
-        <div><dt>Your HP</dt><dd id="health">10</dd></div>
-        <div><dt>Clock</dt><dd id="clock" role="timer">1:30</dd></div>
-        <div><dt>Rivals alive</dt><dd id="alive">—</dd></div>
+      <dl class="round-hud">
+        <div class="health-readout">
+          <dt>Your HP</dt>
+          <dd><span id="health">10 / 10</span><meter id="hpMeter" min="0" max="10" value="10" aria-hidden="true"></meter></dd>
+        </div>
+        <div class="clock-readout"><dt>Time</dt><dd id="clock" role="timer">1:30</dd></div>
+        <div><dt>Rivals<span class="menu-sr"> alive</span></dt><dd id="alive">—</dd></div>
       </dl>
-      <div class="arena-controls">
+      <div id="roundCountdown" aria-hidden="true" hidden></div>
+      <div class="throw-dock">
         <p id="arenaHint" role="status">Line up a rival, then swipe up from Launch.</p>
-        <button id="cameraRetryLive" class="ink-button small-button" type="button" hidden>Retry camera <span aria-hidden="true">↻</span></button>
-        <button id="launch" class="ink-button launch-button" type="button" aria-label="Launch tomato. Swipe up to throw."><i class="tomato-mark" aria-hidden="true"></i> Launch <span aria-hidden="true">↑</span></button>
+        <button id="cameraRetryLive" class="game-key sub-key" type="button" hidden>Retry camera</button>
+        <button id="launch" class="game-key throw-key" type="button" aria-label="Launch tomato. Swipe up to throw.">
+          <i class="throw-fruit" aria-hidden="true"></i><span>Launch</span><i class="throw-chevron" aria-hidden="true"></i>
+        </button>
       </div>
     </section>
 
-    <section id="results" class="screen page" aria-labelledby="resultsTitle">
-      <div class="section-title"><span class="tomato-mark" aria-hidden="true"></span><h1 id="resultsTitle">Round results</h1></div>
-      <div class="lobby-spread results-spread">
-        <div class="winner-print">
-          <div class="poster-field" aria-hidden="true"></div>
-          <h2>Winner</h2>
-          <strong id="winner">—</strong>
-          <canvas class="mascot" width="960" height="816" aria-hidden="true"></canvas>
+    <section id="results" class="screen room-shell" aria-labelledby="resultsTitle">
+      <div class="score-layout">
+        <div class="victory-stage">
+          <div class="victory-burst" aria-hidden="true"></div>
+          <div class="victory-title">
+            <h1 id="resultsTitle"><i class="trophy-glyph" aria-hidden="true"></i> Round results</h1>
+            <h2 id="winner">—</h2>
+          </div>
+          <div class="mascot-stage" aria-hidden="true"><canvas width="240" height="160"></canvas></div>
         </div>
-        <div class="ticket staging">
-          <div class="ticket-heading"><span class="ticket-icon crosshair" aria-hidden="true"></span><h2>Leaderboard</h2></div>
-          <ol id="standings" class="players standings" aria-label="Final standings"></ol>
-          <button id="rematch" class="ink-button action primary" type="button">Rematch <span class="action-arrow" aria-hidden="true">↻</span></button>
+        <div class="score-panel">
+          <h2 class="score-heading">Leaderboard</h2>
+          <ol id="standings" role="list" aria-label="Final standings"></ol>
+          <button id="rematch" class="game-key" type="button">Rematch <span aria-hidden="true">↻</span></button>
         </div>
       </div>
     </section>
   </main>
   <p id="notice" role="status" aria-live="polite" aria-atomic="true"></p>
 
-  <script>
-    // An invite puts Join first in both the layout and the keyboard order.
-    const invitedCode = new URLSearchParams(location.search).get('room');
-    if (/^[0-9]{6}$/.test(invitedCode ?? '')) {
-      const entry = document.querySelector('.entry-ticket');
-      const actions = entry.querySelector('.entry-actions');
-      const divider = actions.querySelector('.or-rule');
-      entry.classList.add('invited');
-      entry.querySelector('#joinCode').value = invitedCode;
-      actions.prepend(entry.querySelector('#joinForm'), divider);
-      divider.textContent = 'or host a room';
-    }
-
-    // Original crate-label illustration, drawn once and shared by the two prints.
-    function printMascot(canvas) {
-      const g = canvas.getContext('2d');
-      if (!g) return;
-      g.scale(canvas.width / 480, canvas.height / 408);
-      const ink = '#202c21', cream = '#fff1c8', butter = '#ffca52';
-      const red = '#ee4c31', shadow = '#b62c27', coral = '#ff8051';
-      const leaf = '#508448', lightLeaf = '#92ab5e';
-      g.lineCap = 'round';
-      g.lineJoin = 'round';
-      function shape(path, fill, outline = ink, width = 5) {
-        const p = new Path2D(path);
-        if (fill) { g.fillStyle = fill; g.fill(p); }
-        if (outline) { g.lineWidth = width; g.strokeStyle = outline; g.stroke(p); }
-      }
-      function line(path, color = ink, width = 4) { shape(path, null, color, width); }
-      function oval(x, y, rx, ry, fill, angle = 0) {
-        g.beginPath(); g.ellipse(x, y, rx, ry, angle, 0, Math.PI * 2);
-        g.fillStyle = fill; g.fill();
-      }
-
-      // Streaks of yellow ink behind a runner, and the slats under its shoes.
-      shape('M9 158 L131 135 L53 160 L114 154 L29 178 L64 164 Z', butter, null);
-      shape('M3 222 L111 198 L62 218 L85 215 L15 239 L46 222 Z', cream, null);
-      line('M20 192 L60 184 M55 286 L114 272 M83 282 L123 272 M14 248 L32 243', butter, 3);
-      shape('M129 385 Q234 367 411 371 L383 378 L431 376 Q395 389 221 393 L275 385 Z', '#172c21', null);
-      line('M83 390 L131 383 M348 395 L391 390', '#9eab67', 2);
-
-      // The far leg kicks behind the fruit. Both boots have a separately inked sole.
-      shape('M229 259 Q227 301 192 312 Q153 322 127 289 L145 270 Q170 291 183 285 Q200 279 199 251 Z', ink);
-      shape('M141 274 Q123 270 112 256 Q96 262 88 276 L100 295 L124 309 Q139 307 151 286 Z', cream);
-      line('M102 264 Q106 279 125 286 M96 274 Q104 288 119 292', red, 4);
-      shape('M104 279 Q92 267 87 259 Q84 248 77 249 Q68 250 67 261 Q57 273 43 275 Q26 278 23 289 Q21 303 42 306 Q58 310 77 306 L105 301 L116 290 Z', butter);
-      shape('M23 290 Q31 305 65 301 L108 290 L113 299 Q64 323 33 310 Q20 304 23 290 Z', cream, ink, 4);
-      line('M70 269 L82 276 M62 273 L75 281 M53 277 L65 284', ink, 3);
-      shape('M278 260 Q286 288 305 302 Q316 309 322 328 L348 321 Q349 298 330 285 L315 258 Z', ink);
-      shape('M315 314 Q324 307 343 307 L356 335 L326 345 Q320 335 315 314 Z', cream);
-      line('M322 322 L346 315 M326 330 L350 323', red, 4);
-      shape('M325 336 Q339 332 353 321 Q364 319 364 332 L367 340 Q391 327 407 332 Q423 336 428 349 Q431 359 416 365 L349 378 Q329 379 322 370 Q315 358 325 336 Z', butter);
-      shape('M320 358 Q330 373 348 369 L413 355 Q424 352 428 348 L430 359 Q425 367 409 371 L347 384 Q324 386 319 370 Z', cream, ink, 4);
-      line('M361 340 L370 346 M372 336 L381 342 M382 334 L391 340', ink, 3);
-
-      // Rubber-hose arms and a clenched glove swinging behind the crown.
-      shape('M174 160 Q146 165 140 137 Q137 115 161 99 L148 80 Q111 103 112 135 Q113 178 152 190 L180 181 Z', ink);
-      shape('M145 104 L138 93 Q129 90 130 81 Q132 72 144 73 Q139 61 146 56 Q153 51 160 60 Q164 46 172 48 Q180 49 181 60 Q186 51 194 55 Q205 60 197 72 L190 85 Q184 98 164 104 L152 111 Z', cream);
-      line('M143 74 Q151 75 155 84 M160 60 L165 71 M180 60 L179 70 M166 88 Q178 79 189 83', ink, 3);
-      shape('M137 98 Q152 103 162 91 L171 101 Q161 115 147 116 Z', butter, ink, 4);
-
-      // A lobed heirloom silhouette. Clip the separate shadow and halftone plates.
-      const fruit = 'M153 119 C176 85 212 79 244 88 C264 74 299 76 323 89 C362 88 389 114 395 149 C410 182 402 217 379 244 C355 271 311 290 280 283 C247 294 202 280 177 255 C148 244 129 216 129 183 C120 159 131 133 153 119 Z';
-      shape(fruit, red);
-      g.save();
-      g.clip(new Path2D(fruit));
-      shape('M133 183 Q148 238 196 248 Q246 285 278 266 Q343 272 379 216 Q405 173 388 134 L414 138 L421 257 L327 302 L174 285 Z', shadow, null);
-      shape('M152 141 Q167 106 211 101 Q189 100 174 107 Q156 116 152 141 Z M165 154 Q174 120 205 111 Q179 129 165 154 Z', coral, null);
-      for (let row = 0; row < 14; row++) {
-        for (let col = 0; col < 36; col++) {
-          const x = 125 + col * 8 + (row % 2) * 4, y = 182 + row * 7;
-          const depth = y - (255 - (x - 260) ** 2 / 210);
-          if (depth > 0) oval(x, y, Math.min(1.8, depth / 18), Math.min(1.5, depth / 21), '#983725');
-        }
-      }
-      g.restore();
-      line(fruit, ink, 5);
-      line('M153 160 Q146 180 153 193 M162 201 L166 207 M355 236 Q343 251 324 257', shadow, 4);
-      line('M164 137 Q177 114 197 109 M146 149 L151 138', cream, 5);
-      oval(203, 105, 4, 2.5, cream, -.35);
-
-      // Pointed leaves overlap the red ink, with gouged veins in a lighter plate.
-      shape('M240 97 Q216 79 183 82 Q203 70 230 78 Q204 56 181 53 Q213 47 244 66 Q238 46 248 28 Q250 51 264 64 Q277 45 293 41 Q280 59 279 71 Q313 52 343 65 Q316 66 297 86 Q320 82 340 96 Q309 93 288 103 Q293 112 294 126 Q278 118 266 103 Q250 120 225 125 Q242 108 243 99 Q210 109 194 104 Z', leaf);
-      shape('M251 77 Q252 48 264 25 Q271 11 280 9 L289 17 Q275 25 269 45 L265 75 Z', leaf);
-      line('M257 83 L207 61 M272 88 L321 67 M271 92 L288 112 M252 92 L230 104 M259 65 Q262 41 274 25', lightLeaf, 3);
-
-      // Heavy brow, pie-cut pupils, a grin and cheek ink keep the face legible at phone size.
-      shape('M208 149 Q228 126 260 142 Q266 164 250 180 Q232 196 216 181 Q205 169 208 149 Z', cream);
-      shape('M280 139 Q302 123 321 127 Q328 148 317 165 Q308 180 293 176 Q280 169 280 139 Z', cream);
-      oval(246, 157, 10, 17, ink, .22); oval(310, 145, 9, 16, ink, .24);
-      oval(248, 150, 3.3, 4.2, cream); oval(312, 137, 3, 4, cream);
-      shape('M201 139 Q225 133 255 148 L263 141 Q238 120 204 129 Z M276 137 L283 144 Q301 131 324 125 L322 117 Q295 119 276 137 Z', ink, ink, 3);
-      shape('M264 169 Q277 150 288 166 Q293 174 285 180 Q273 186 260 180', coral, ink, 4);
-      shape('M208 192 Q238 205 261 200 Q299 197 330 176 Q327 209 303 225 Q274 246 240 228 Q222 220 208 192 Z', ink, ink, 4);
-      shape('M216 198 Q272 215 323 183 L317 196 Q269 226 230 212 Z', cream, null);
-      line('M247 205 L250 214 M298 196 L298 204', ink, 2.3);
-      shape('M262 230 Q278 215 299 219 Q286 233 268 232 Z', coral, null);
-      line('M201 190 Q205 184 213 185 M327 175 Q333 170 338 176 M183 177 L191 172 M185 184 L193 179 M333 157 L340 151 M338 161 L345 155', ink, 2.8);
-
-      // Forward glove, drawn last so it comes out of the label toward the player.
-      shape('M374 192 Q396 210 408 200 Q420 189 418 168 L440 167 Q450 198 431 218 Q408 244 371 222 Z', ink);
-      shape('M414 178 Q428 184 442 176 L445 164 L417 160 Z', butter, ink, 4);
-      shape('M418 166 Q411 154 407 149 Q396 142 397 133 Q398 123 406 124 L415 128 Q409 112 416 108 Q424 103 430 114 Q429 99 439 100 Q448 101 450 113 Q455 104 462 111 Q469 120 464 133 Q474 131 475 139 Q476 150 462 162 Q454 173 440 174 Z', cream);
-      line('M415 128 Q429 129 433 141 M430 114 L435 125 M450 114 L449 126 M463 132 L458 142 M427 157 Q435 147 449 148', ink, 3.4);
-    }
-    const prints = document.querySelectorAll('.mascot');
-    printMascot(prints[0]);
-    prints[1].getContext('2d')?.drawImage(prints[0], 0, 0);
-  </script>
   <script type="module" src="/game.js"></script>
 </body>
 </html>

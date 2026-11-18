@@ -1,3 +1,4 @@
+import { mountStartMenu } from './menu.js'
 import QRCode from 'qrcode'
 import { createConnection } from './connection.js'
 import { createArena } from './arena.js'
@@ -10,9 +11,18 @@ let pendingDescriptor, descriptorSent = false, lastQr = '', noticeTimer, hintUnt
 let screen = 'entry', lastCountdown = '', connecting = false
 
 function screenTo(next) {
+  const changed = next !== screen
   screen = next
   document.body.dataset.screen = next
   el('leave').hidden = next === 'entry'
+
+  if (changed) {
+    if (el('menuHelp').open) el('menuHelp').close()
+    const panel = el(next)
+    panel.tabIndex = -1
+    panel.focus({preventScroll:true})
+    window.scrollTo(0,0)
+  }
 }
 
 function notice(message) {
@@ -160,7 +170,13 @@ function textNode(tag, value) {
 function playerRow(p, rank, detail) {
   const li = document.createElement('li')
 
-  if (rank) li.append(textNode('b',String(rank).padStart(2,'0')))
+  if (rank) {
+    li.dataset.rank = String(rank)
+    li.append(textNode('b',String(rank).padStart(2,'0')))
+  } else {
+    li.dataset.state = !p.connected ? 'offline' : p.ready && p.descriptor ? 'ready' : 'pending'
+  }
+
   const swatch = document.createElement('span')
   swatch.className = 'swatch'
   swatch.style.backgroundColor = p.color
@@ -170,21 +186,33 @@ function playerRow(p, rank, detail) {
 }
 
 function renderLobby() {
+  const host = isHost()
+  el('lobby').dataset.role = host ? 'host' : 'guest'
+  el('lobbyTitle').textContent = host ? 'Host room' : 'Room lobby'
   el('roomCode').textContent = room.code
-  el('inviteReachability').hidden = location.protocol === 'https:' && !['localhost','127.0.0.1','[::1]'].includes(location.hostname)
-  el('inviteQr').parentElement.hidden = !isHost()
-  el('inviteQr').closest('.invite-print').querySelector('h2').textContent = isHost() ? 'Scan to join' : 'Room invite'
+  el('inviteReachability').hidden = !host || location.protocol === 'https:' && !['localhost','127.0.0.1','[::1]'].includes(location.hostname)
+  el('inviteQr').parentElement.hidden = !host
+  el('inviteHeading').textContent = host ? 'Scan to join' : 'Room invite'
 
-  if (isHost() && lastQr !== room.code) {
+  if (host && lastQr !== room.code) {
     lastQr = room.code
-    QRCode.toCanvas(el('inviteQr'),inviteUrl(),{width:248,margin:4,color:{dark:'#142719',light:'#fffdee'}}).catch(() => notice('Share the invite link or room code'))
+    QRCode.toCanvas(el('inviteQr'),inviteUrl(),{width:248,margin:4,color:{dark:'#221a32',light:'#fffdee'}}).catch(() => notice('Share the invite link or room code'))
   }
 
   el('roster').replaceChildren(...room.players.map(p => playerRow(p,null,
-    !p.connected ? 'Reconnecting' : !p.ready ? 'Opening camera' : p.descriptor ? 'Ready' : 'Color pending')))
+    !p.connected ? 'Reconnecting' : !p.ready ? 'Camera pending' : p.descriptor ? 'Ready' : 'Color pending')))
   const online = room.players.filter(p => p.connected)
-  el('startRound').hidden = !isHost()
-  el('startRound').disabled = !connection.connected || online.length < 2 || online.some(p => !p.ready || !p.descriptor)
+  const ready = online.filter(p => p.ready && p.descriptor).length
+  el('rosterCount').textContent = online.length + ' / 8'
+  let status = host ? 'Everyone is ready. Start the round!' : 'Waiting for the host to start.'
+
+  if (!connection.connected) status = 'Reconnecting to the room…'
+  else if (online.length < 2) status = 'Invite a second player to start.'
+  else if (ready !== online.length) status = ready + ' of ' + online.length + ' ready. Check cameras and shirt colors.'
+
+  if (el('lobbyStatus').textContent !== status) el('lobbyStatus').textContent = status
+  el('startRound').hidden = !host
+  el('startRound').disabled = !connection.connected || online.length < 2 || ready !== online.length
   el('retryCamera').disabled = cameraBusy
   el('retryCamera').textContent = cameraReady ? 'Refresh color' : 'Retry camera'
 }
@@ -193,7 +221,8 @@ function renderResults() {
   const first = room.leaderboard.filter(p => p.rank === 1)
   el('winner').textContent = first.length === 1 ? first[0].name + ' wins!' : 'Shared first place'
   el('standings').replaceChildren(...room.leaderboard.map(row => playerRow(
-    room.players.find(p => p.id === row.id) || row,row.rank,row.hits+' hits · '+row.eliminations+' KOs')))
+    room.players.find(p => p.id === row.id) || row,row.rank,
+    row.hits + (row.hits === 1 ? ' hit' : ' hits') + ' · ' + row.eliminations + (row.eliminations === 1 ? ' KO' : ' KOs'))))
   el('rematch').hidden = !isHost()
   el('rematch').disabled = !connection.connected
 }
@@ -204,6 +233,10 @@ function updateClock() {
   const left = Math.max(0,Math.ceil((room.endsAt-Math.max(serverTime(),room.startsAt))/1000))
   el('clock').textContent = Math.floor(left/60)+':'+String(left%60).padStart(2,'0')
   el('launch').disabled = !canThrow()
+  const countdown = el('roundCountdown')
+  countdown.hidden = !connection.connected || before === 0
+
+  if (!countdown.hidden && countdown.textContent !== String(before)) countdown.textContent = String(before)
 
   if (performance.now() < hintUntil && !before) return
   const p = me()
@@ -232,6 +265,7 @@ function render() {
   else if (next === 'results') renderResults()
   else {
     el('health').textContent = String(me()?.health ?? 0) + ' / 10'
+    el('hpMeter').value = me()?.health ?? 0
     el('alive').textContent = String(room.players.filter(p => p.id !== myId && !p.spectator && p.health > 0).length)
     el('cameraRetryLive').hidden = cameraReady && !!me()?.descriptor
     el('cameraRetryLive').disabled = cameraBusy
@@ -321,10 +355,7 @@ el('copyInvite').addEventListener('click',async () => {
 
 const invite = new URLSearchParams(location.search).get('room')
 
-if (invite && /^\d{6}$/.test(invite)) {
-  el('joinCode').value = invite
-  document.body.dataset.invited = 'true'
-}
+mountStartMenu(invite)
 
 screenTo('entry')
 

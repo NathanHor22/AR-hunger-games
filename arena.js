@@ -1,4 +1,5 @@
-﻿import { makeBody, hitBody, drawPaint } from "./public/body.js";
+import { drawTomatoProjectile } from "./menu-art.js";
+import { makeBody, hitBody, drawPaint } from "./public/body.js";
 
 const flightMs = 280;
 
@@ -176,30 +177,6 @@ function splatSound(audio, frequency, gain) {
   oscillator.connect(volume).connect(audio.destination);
   oscillator.start();
   oscillator.stop(audio.currentTime + 0.11);
-}
-
-function paintTomato(ctx, x, y, r) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.24);
-  ctx.fillStyle = "#ff442b";
-  ctx.strokeStyle = "#371c16";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r, r * 0.88, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = "#377e32";
-  ctx.beginPath();
-
-  for (let i = 0; i < 10; i++) {
-    const a = (Math.PI * i) / 5;
-    const length = r * (i % 2 ? 0.19 : 0.66);
-    ctx.lineTo(length * Math.cos(a), -r * 0.68 + length * Math.sin(a) * 0.55);
-  }
-
-  ctx.fill();
-  ctx.restore();
 }
 
 // Match peripheral patches instead of following the targeted player's motion.
@@ -469,8 +446,8 @@ export function createArena({
         ),
       );
 
-      ctx.fillStyle = "#172417";
-      ctx.font = "bold 14px system-ui";
+      ctx.fillStyle = "#251b35";
+      ctx.font = "bold 14px Consolas, monospace";
       ctx.textAlign = "center";
 
       const box = Math.max(
@@ -479,7 +456,7 @@ export function createArena({
       );
 
       ctx.fillRect(x - box / 2, y - 21, box, 29);
-      ctx.fillStyle = "#fff8dd";
+      ctx.fillStyle = "#fff2d2";
       ctx.fillText(player.name, x, y - 6, box - 8);
       ctx.fillStyle = player.color;
 
@@ -521,7 +498,7 @@ export function createArena({
         t * (shot.to.y - shot.from.y + (shot.shift?.y ?? 0)) -
         Math.sin(t * Math.PI) * height * 0.05;
 
-      paintTomato(ctx, x, y, 20 - 12 * t);
+      drawTomatoProjectile(ctx, x, y, 20 - 12 * t);
     }
 
     if (time < flashUntil) {

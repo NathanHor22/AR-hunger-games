@@ -23,6 +23,7 @@ const mime = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
   '.ico': 'image/x-icon',
 };
 

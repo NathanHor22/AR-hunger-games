@@ -1,0 +1,23 @@
+{
+  "name": "tomato-riot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "prestart": "npm run build",
+    "start": "node server.js",
+    "test": "node --test",
+    "lint": "node --experimental-strip-types ./node_modules/oxlint/bin/oxlint"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.2.3",
+    "qrcode": "^1.5.4",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.94.0",
+    "esbuild": "^0.28.2",
+    "oxlint": "1.94.0"
+  }
+}

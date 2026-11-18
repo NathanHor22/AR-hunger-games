@@ -1,3 +1,5 @@
+import { bodyScale, clearlyInFront } from './depth.js';
+
 // Color thresholds are prototype values. The ambiguity checks intentionally leave similar shirts untargetable.
 export function appearanceDistance(a, b) {
   if (a?.length !== 12 || b?.length !== 12) return Infinity;
@@ -24,36 +26,48 @@ function crossing(a, b) {
 export function createMatcher() {
   let previous = new Map();
 
-  return (people, players, myId, now) => {
+  return (people, players, myId, now, width = 1, height = 1) => {
     const boxes = people.map(torso);
 
     const candidates = people.map(p => players.filter(player => player.descriptor?.length === 12)
       .map(player => ({ id: player.id, d: appearanceDistance(p.descriptor, player.descriptor) }))
       .sort((a, b) => a.d - b.d));
 
+    const tracks = people.map((person, index) => {
+      const [best, second] = candidates[index];
+      const box = boxes[index];
+
+      if (!best || best.id === myId || !(best.d < 0.085) || (second && !(second.d - best.d > 0.035))
+        || candidates.some((row, i) => i !== index && row.some(c => c.id === best.id && c.d < best.d + 0.035))) return null;
+      const last = previous.get(best.id);
+
+      const continuous = last && now - last.now < 550
+        && Math.hypot(box.x - last.x, box.y - last.y) < Math.max(0.10, box.width * 1.6);
+
+      const distinct = best.d < 0.055 && (!second || second.d - best.d > 0.075);
+
+      return { ...box, ...bodyScale(person.landmarks, person.worldLandmarks, width, height),
+        id: best.id, now, seen: continuous ? last.seen + 1 : 1, distinct };
+    });
+
+    function knownSeparation(a, b) {
+      if (!a || !b || a.seen <= 3 || b.seen <= 3 || !a.distinct || !b.distinct) return false;
+      const oldA = previous.get(a.id), oldB = previous.get(b.id);
+
+      return (clearlyInFront(a, b) && clearlyInFront(oldA, oldB))
+        || (clearlyInFront(b, a) && clearlyInFront(oldB, oldA));
+    }
+
     const next = new Map();
 
     const matched = people.map((person, index) => {
-      const [best, second] = candidates[index];
-      let id = null;
-      const box = boxes[index];
+      const track = tracks[index];
 
-      if (best && best.id !== myId && best.d < 0.085
-        && (!second || second.d - best.d > 0.035)
-        && !boxes.some((b, i) => i !== index && crossing(b, box))
-        && !candidates.some((row, i) => i !== index && row.some(c => c.id === best.id && c.d < best.d + 0.035))) {
-        const last = previous.get(best.id);
+      if (!track || boxes.some((other, i) => i !== index && crossing(track, other)
+        && !knownSeparation(track, tracks[i]))) return { ...person, id: null };
+      next.set(track.id, track);
 
-        const continuous = last && now - last.now < 550
-          && Math.hypot(box.x - last.x, box.y - last.y) < Math.max(0.10, box.width * 1.6);
-
-        const seen = continuous ? last.seen + 1 : 1;
-        next.set(best.id, { ...box, seen, now });
-
-        if (seen >= 3) id = best.id;
-      }
-
-      return { ...person, id };
+      return { ...person, id: track.seen >= 3 ? track.id : null };
     });
 
     previous = next;
@@ -293,7 +307,7 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
           const { people, capturedAt, probe } = result;
 
           if (mode === 'lobby') lobby.update(people, roster, capturedAt);
-          else onFrame(match(people, roster, myId, capturedAt), capturedAt, probe);
+          else onFrame(match(people, roster, myId, capturedAt, video.videoWidth, video.videoHeight), capturedAt, probe);
         }
       } catch (error) {
         if (token === generation && phase === mode) {

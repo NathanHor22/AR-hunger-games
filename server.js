@@ -1,3 +1,4 @@
+import { bodyTriangleCount } from './public/body.js';
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createServer as httpServer } from 'node:http';
 import { createServer as httpsServer } from 'node:https';
@@ -436,7 +437,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
         if (
           !Number.isInteger(triangle) ||
           triangle < 0 ||
-          triangle >= 48 ||
+          triangle >= bodyTriangleCount ||
           !Number.isFinite(u) ||
           !Number.isFinite(v) ||
           u < 0 ||

@@ -63,6 +63,26 @@ test("turning away hides the original chest triangle", () => {
   assert.ok(!back.visible.some((face) => face.id === first.triangle));
 });
 
+test("head, forearm and shin paint retain their own surface coordinates as a person moves", () => {
+  const marks = pose();
+
+  for (const [id, x, y] of [[2,.52,.09], [5,.48,.09], [7,.55,.1], [8,.45,.1],
+    [9,.52,.13], [10,.48,.13], [15,.78,.46], [25,.61,.74], [27,.63,.95]]) {
+    marks[id] = { x, y, z:0, visibility:1 };
+  }
+
+  const body = makeBody(marks, null, 800, 600);
+  const moved = makeBody(marks.map(p => p && { ...p, x:p.x+.05 }), null, 800, 600);
+
+  for (const [part, x, y] of [[9,400,62], [3,593,258], [7,496,507]]) {
+    const first = hitBody(body, x, y);
+    assert.equal(Math.floor(first?.triangle / 16), part);
+    const next = hitBody(moved, x+40, y);
+    assert.equal(next?.triangle, first.triangle);
+    assert.ok(Math.abs(next.u - first.u) + Math.abs(next.v - first.v) < 1e-8);
+  }
+});
+
 test("a missing elbow drops only that arm; a missing torso drops the body", () => {
   const landmarks = pose();
   const arm = hitBody(makeBody(landmarks, null, 800, 600), 527, 195);

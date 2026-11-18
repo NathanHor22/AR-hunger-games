@@ -243,7 +243,7 @@ function updateClock() {
 
   const hint = !connection.connected ? 'Reconnecting…' : before ? 'Starting in '+before
     : !cameraReady ? 'Open camera to track players' : p?.spectator ? 'Spectating this round'
-    : !p?.health ? 'You’re out · spectating' : 'Flick up to throw'
+    : !p?.health ? 'You’re out · spectating' : ''
 
   if (hint !== lastCountdown || el('arenaHint').textContent !== hint) el('arenaHint').textContent = hint
   lastCountdown = hint

@@ -6,10 +6,22 @@ import {
   contactAt,
   cameraShift,
   resolveShot,
+  flightProfile,
 } from "../arena.js";
 import { makeBody } from "../public/body.js";
 
 const camera = { x: -160, y: 0, width: 640, height: 480 };
+
+test("larger projected bodies meet the fruit sooner and at a larger size", () => {
+  const near = flightProfile(72, 1100);
+  const far = flightProfile(72, 190);
+  assert.equal(near.startRadius, 72);
+  assert.ok(near.endRadius > far.endRadius && near.duration < far.duration);
+  const hit = { targetId: "red" };
+  const shot = { at:1000, ...far };
+  assert.equal(resolveShot(shot, 1260, 1300, () => hit), undefined);
+  assert.equal(resolveShot(shot, 1000 + far.duration, 1450, () => hit), hit);
+});
 
 test("a frame captured at impact still scores after delayed inference", () => {
   const shot = { at: 1000 };

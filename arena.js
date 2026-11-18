@@ -1,7 +1,19 @@
 import { drawTomatoProjectile } from "./menu-art.js";
 import { makeBody, hitBody, drawPaint } from "./public/body.js";
+import { ownership, clearlyInFront } from "./public/depth.js";
+import { drawNameplates } from "./public/nameplate.js";
 
 const flightMs = 280;
+
+export function flightProfile(startRadius, pixelsPerMeter) {
+  // Project a palm-sized fruit onto the same local scale as the tracked body.
+  const endRadius = Math.min(startRadius * .68, Math.max(4, pixelsPerMeter > 0
+    ? pixelsPerMeter * .04 : startRadius * .10));
+
+  const duration = Math.round(390 - 240 * endRadius / startRadius);
+
+  return { startRadius, endRadius, duration };
+}
 
 // undefined keeps the throw open. null closes it as a miss.
 export function resolveShot(shot, capturedAt, receivedAt, contact) {
@@ -14,7 +26,7 @@ export function resolveShot(shot, capturedAt, receivedAt, contact) {
   if (age > 1000) return shot.beforeImpact?.hit ?? null;
 
   if (capturedAt == null || capturedAt > receivedAt) return undefined;
-  const offset = capturedAt - shot.at - flightMs;
+  const offset = capturedAt - shot.at - (shot.duration ?? flightMs);
 
   if (offset < -100 || offset > 145) return undefined;
   const hit = contact();
@@ -72,39 +84,19 @@ export function endpoint(start, finger, width, height) {
   };
 }
 
-// All masks from one detector result share a resolution. Reserve 0 for
-// background and 255 for edges or overlapping silhouettes of uncertain depth.
-function ownership(people) {
-  const first = people.find((p) => p.mask)?.mask;
-
-  if (!first) return null;
-  const owners = new Uint8Array(first.width * first.height);
-
-  for (const [index, person] of people.entries()) {
-    const mask = person.mask;
-
-    if (!mask || mask.width !== first.width || mask.height !== first.height)
-      continue;
-
-    for (let i = 0; i < owners.length; i++) {
-      const confidence = mask.data[i];
-
-      if (confidence > 0.3)
-        owners[i] = owners[i] || confidence < 0.6 ? 255 : index + 1;
-    }
-  }
-
-  return { owners, width: first.width, height: first.height };
-}
-
-export function contactAt(people, x, y, camera, mask = ownership(people)) {
+function surfaceAt(people, x, y, camera, mask) {
   if (!mask) return null;
   const col = Math.floor(((x - camera.x) * mask.width) / camera.width);
   const row = Math.floor(((y - camera.y) * mask.height) / camera.height);
 
   if (col < 0 || col >= mask.width || row < 0 || row >= mask.height)
     return null;
-  const person = people[mask.owners[row * mask.width + col] - 1];
+
+  return people[mask.owners[row * mask.width + col] - 1];
+}
+
+export function contactAt(people, x, y, camera, mask = ownership(people)) {
+  const person = surfaceAt(people, x, y, camera, mask);
 
   if (
     !person?.player?.connected ||
@@ -113,7 +105,7 @@ export function contactAt(people, x, y, camera, mask = ownership(people)) {
   )
     return null;
 
-  if (people.some((other) => !other.mask && hitBody(other.body, x, y)))
+  if (people.some((other) => !other.mask && !clearlyInFront(person.body, other.body) && hitBody(other.body, x, y)))
     return null;
   const anchor = hitBody(person.body, x, y);
 
@@ -126,22 +118,22 @@ function drawStains(ctx, people, mask, camera, silhouette) {
   silhouette.height = mask.height;
   const stencil = silhouette.getContext("2d");
   const alpha = stencil.createImageData(mask.width, mask.height);
-  const uncertain = new Path2D();
-
-  for (const person of people) {
-    if (person.mask || !person.body) continue;
-
-    for (const face of person.body.visible) {
-      const [a, b, c] = face.vertices;
-      uncertain.moveTo(a.x, a.y);
-      uncertain.lineTo(b.x, b.y);
-      uncertain.lineTo(c.x, c.y);
-      uncertain.closePath();
-    }
-  }
+  const unmasked = people.filter(person => !person.mask && person.body);
 
   for (const [index, person] of people.entries()) {
     if (!person.body || !person.player?.splats.length || !person.mask) continue;
+    const uncertain = new Path2D();
+
+    for (const other of unmasked) {
+      if (clearlyInFront(person.body, other.body)) continue;
+
+      for (const {vertices: [a,b,c]} of other.body.visible) {
+        uncertain.moveTo(a.x,a.y);
+        uncertain.lineTo(b.x,b.y);
+        uncertain.lineTo(c.x,c.y);
+        uncertain.closePath();
+      }
+    }
 
     for (let i = 0; i < mask.owners.length; i++)
       alpha.data[4 * i + 3] = mask.owners[i] === index + 1 ? 255 : 0;
@@ -229,6 +221,10 @@ export function createArena({
   canThrow,
 }) {
   const ctx = canvas.getContext("2d");
+  const held = launch.querySelector("canvas");
+  drawTomatoProjectile(held.getContext("2d"), held.width / 2, held.height / 2, held.width / 2);
+  const controls = [document.querySelector(".round-hud"), document.getElementById("leave")];
+  let reserved = [];
 
   let room,
     myId,
@@ -238,8 +234,7 @@ export function createArena({
     animation = 0;
 
   let shot,
-    finger,
-    origin,
+    grip,
     nextThrow = 0,
     audio,
     lastHits,
@@ -276,6 +271,8 @@ export function createArena({
 
     if (!room || next.round !== room.round || next.code !== room.code) {
       shot = null;
+      grip = null;
+      delete launch.dataset.empty;
       pendingShots.clear();
       nextThrow = 0;
       lastHits = me?.hits;
@@ -337,6 +334,7 @@ export function createArena({
     lastPoseTime = frameAt;
     sceneWidth = width;
     sceneHeight = height;
+    reserved = controls.map(control => control.getBoundingClientRect());
     mask = ownership(scene);
     paintDirty = true;
   }
@@ -428,77 +426,32 @@ export function createArena({
 
     if (visible && scene.length) ctx.drawImage(overlay, 0, 0);
 
-    for (const item of visible ? scene : []) {
-      const { player, body, points } = item;
+    if (visible) drawNameplates(ctx, scene, width, height, reserved);
 
-      if (!player || !body) continue;
+    if (grip && !canThrow()) grip = null;
 
-      const x = Math.max(
-        46,
-        Math.min(width - 46, (points[11].x + points[12].x) * width * 0.5),
-      );
+    if (shot && time - shot.at >= shot.duration) shot = null;
 
-      const y = Math.max(
-        24,
-        Math.min(
-          height - 24,
-          Math.min(points[11].y, points[12].y) * height - 12,
-        ),
-      );
-
-      ctx.fillStyle = "#251b35";
-      ctx.font = "bold 14px Consolas, monospace";
-      ctx.textAlign = "center";
-
-      const box = Math.max(
-        76,
-        Math.min(170, ctx.measureText(player.name).width + 16),
-      );
-
-      ctx.fillRect(x - box / 2, y - 21, box, 29);
-      ctx.fillStyle = "#fff2d2";
-      ctx.fillText(player.name, x, y - 6, box - 8);
-      ctx.fillStyle = player.color;
-
-      for (let i = 0; i < player.health; i++)
-        ctx.fillRect(
-          x - box / 2 + 4 + (i * (box - 8)) / 10,
-          y,
-          Math.max(1, (box - 8) / 10 - 1),
-          4,
-        );
-    }
-
-    if (origin && finger) {
-      const to = endpoint(origin, finger, width, height);
-      ctx.strokeStyle = "#fff3bf";
-      ctx.setLineDash([3, 7]);
-      ctx.beginPath();
-      ctx.moveTo(origin.x, origin.y);
-      ctx.lineTo(to.x, to.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    if (shot && time - shot.at >= flightMs) shot = null;
-
-    if (shot) {
-      const t = Math.min(1, (time - shot.at) / flightMs);
+    if (grip) {
+      drawTomatoProjectile(ctx, grip.center.x, grip.center.y, grip.radius);
+    } else if (shot) {
+      const t = Math.max(0, (time - shot.at) / shot.duration);
 
       if (camera && frameAt > shot.at && shot.poseAt !== frameAt) {
         shot.poseAt = frameAt;
         shot.shift = cameraShift(shot.pixels, frameProbe, camera);
       }
 
-      const x =
-        shot.from.x + t * (shot.to.x - shot.from.x + (shot.shift?.x ?? 0));
+      // Interpolate inverse depth so the fruit recedes quickly on leaving the hand.
+      const radius = 1 / ((1 - t) / shot.startRadius + t / shot.endRadius);
+      const x = shot.from.x + t * (shot.to.x - shot.from.x + (shot.shift?.x ?? 0));
 
-      const y =
-        shot.from.y +
-        t * (shot.to.y - shot.from.y + (shot.shift?.y ?? 0)) -
-        Math.sin(t * Math.PI) * height * 0.05;
+      const y = shot.from.y + t * (shot.to.y - shot.from.y + (shot.shift?.y ?? 0))
+        - Math.sin(t * Math.PI) * height * .045;
 
-      drawTomatoProjectile(ctx, x, y, 20 - 12 * t);
+      drawTomatoProjectile(ctx, x, y, radius);
+    } else if (launch.dataset.empty && time >= nextThrow) {
+      delete launch.dataset.empty;
     }
 
     if (time < flashUntil) {
@@ -509,23 +462,27 @@ export function createArena({
     animation = requestAnimationFrame(draw);
   }
 
-  function fire(from, to) {
+  function fire(from, to, radius) {
     const now = performance.now();
 
     if (!canThrow() || now < nextThrow) return;
     const id = crypto.randomUUID();
 
     if (!send({ type: "throw", round: room.round, shotId: id })) return;
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+    let scale;
+
+    if (now - frameAt <= 380) {
+      prepareScene(width, height);
+      scale = surfaceAt(scene, to.x, to.y, camera, mask)?.body?.pixelsPerMeter;
+    }
+
     nextThrow = now + 410;
+    launch.dataset.empty = "true";
     shot = {
-      id,
-      round: room.round,
-      from,
-      to,
-      at: now,
+      id, round: room.round, from, to, at: now, width, height,
+      ...flightProfile(radius, scale),
       pixels: pixels(),
-      width: canvas.clientWidth,
-      height: canvas.clientHeight,
       videoWidth: video.videoWidth,
       videoHeight: video.videoHeight,
     };
@@ -533,48 +490,60 @@ export function createArena({
     splatSound(audio, 190, 0.04);
   }
 
-  function local(e) {
-    const box = canvas.getBoundingClientRect();
+  function handPosition() {
+    const fruit = held.getBoundingClientRect();
+    const view = canvas.getBoundingClientRect();
 
-    return { x: e.clientX - box.left, y: e.clientY - box.top };
+    return { x: fruit.left - view.left + fruit.width / 2, y: fruit.top - view.top + fruit.height / 2,
+      radius: fruit.width / 2 };
   }
 
+  function moveFruit(e) {
+    grip.center.x = grip.home.x + e.clientX - grip.touchX;
+    grip.center.y = grip.home.y + e.clientY - grip.touchY;
+  }
+
+  // The fruit owns touch gestures. Keep the browser from interpreting a fast
+  // throw as a fling and consuming the first tap on the following screen.
+  launch.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
   launch.addEventListener("pointerdown", (e) => {
-    if (!e.isPrimary || e.button !== 0 || !canThrow()) return;
+    if (!e.isPrimary || e.button !== 0 || grip || !canThrow() || performance.now() < nextThrow) return;
 
     if (globalThis.AudioContext) {
       audio ??= new AudioContext();
       audio.resume().catch(() => {});
     }
 
+    const home = handPosition();
+    grip = { id: e.pointerId, home, center: { x: home.x, y: home.y }, radius: home.radius,
+      touchX: e.clientX, touchY: e.clientY };
     launch.setPointerCapture(e.pointerId);
-    origin = local(e);
-    finger = origin;
+    launch.dataset.empty = "true";
   });
   launch.addEventListener("pointermove", (e) => {
-    if (origin && e.isPrimary) finger = local(e);
+    if (grip?.id === e.pointerId) moveFruit(e);
   });
   launch.addEventListener("pointerup", (e) => {
-    if (!origin || !e.isPrimary) return;
-    const end = local(e);
+    if (grip?.id !== e.pointerId) return;
+    moveFruit(e);
+    const { home, center, radius } = grip;
+    grip = null;
 
-    if (origin.y - end.y > 12)
-      fire(
-        origin,
-        endpoint(origin, end, canvas.clientWidth, canvas.clientHeight),
-      );
-    else message("Flick the tomato upward to throw");
-    origin = finger = null;
+    if (home.y - center.y > 12) {
+      fire(center, endpoint(home, center, canvas.clientWidth, canvas.clientHeight), radius);
+    }
   });
-  launch.addEventListener("lostpointercapture", () => {
-    origin = finger = null;
-  });
+
+  function cancelGrip(e) {
+    if (grip?.id === e.pointerId) grip = null;
+  }
+
+  launch.addEventListener("pointercancel", cancelGrip);
+  launch.addEventListener("lostpointercapture", cancelGrip);
   launch.addEventListener("click", (e) => {
-    if (e.detail === 0)
-      fire(
-        { x: canvas.clientWidth / 2, y: canvas.clientHeight * 0.88 },
-        { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 },
-      );
+    if (e.detail !== 0 || !canThrow()) return;
+    const home = handPosition();
+    fire(home, { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 }, home.radius);
   });
 
   return {
@@ -595,7 +564,8 @@ export function createArena({
       people = [];
       shot = null;
       pendingShots.clear();
-      origin = finger = null;
+      grip = null;
+      delete launch.dataset.empty;
       lastPoseTime = -1;
     },
   };

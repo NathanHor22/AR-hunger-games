@@ -94,14 +94,15 @@ test('round, identity, idempotent hits, rematch and secure recovery', { timeout:
     a.send({ type: 'barrier' });
     await a.wait((m) => m.type === 'error');
     game.advance(200);
-    const impact = { type: 'impact', round, shotId, targetId: peer.playerId, anchor };
+    const surface = n % 2 ? anchor : { ...anchor, triangle: 152 };
+    const impact = { type: 'impact', round, shotId, targetId: peer.playerId, anchor: surface };
     a.send({ ...impact, shotId: shotId + '-cooldown' });
     a.send(impact);
     a.send(impact);
     const state = await a.state((r) => r.players[0].hits === n);
     assert.equal(state.players[1].health, 10 - n);
     assert.equal(state.players[1].splats.length, n);
-    assert.equal(state.players[1].splats.at(-1).triangle, 2);
+    assert.equal(state.players[1].splats.at(-1).triangle, surface.triangle);
 
     if (n === 10) {
       assert.equal(state.phase, 'finished');

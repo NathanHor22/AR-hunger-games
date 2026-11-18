@@ -57,8 +57,8 @@
 }
 .throw-dock {
   position: absolute;
-  inset-inline: max(.8rem, env(safe-area-inset-left)) max(.8rem, env(safe-area-inset-right));
-  bottom: max(1rem, env(safe-area-inset-bottom));
+  inset-inline: 0;
+  bottom: max(.35rem, env(safe-area-inset-bottom));
   display: grid;
   justify-items: center;
   gap: .6rem;
@@ -67,7 +67,7 @@
 .throw-dock button { pointer-events: auto; }
 #arenaHint {
   margin: 0;
-  max-width: min(100%, 30rem);
+  max-width: min(calc(100% - 2rem), 30rem);
   padding: .45rem .75rem;
   color: var(--cream);
   background: #211831;
@@ -79,39 +79,28 @@
 #arenaHint:empty { display: none; }
 #cameraRetryLive { width: fit-content; min-height: 44px; font-size: 1.1rem; }
 #launch {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  min-height: 3.6rem;
-  width: min(100%, 15rem);
-  font-size: clamp(1.75rem, 6vw, 2.35rem);
+  appearance: none;
+  display: block;
+  width: clamp(132px, 36vmin, 166px);
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: grab;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.throw-fruit {
-  position: relative;
-  width: 1.42rem;
-  height: 1.26rem;
-  background: #de3841;
-  box-shadow: inset 3px -4px #963446;
-  clip-path: polygon(0 29%, 15% 29%, 15% 15%, 39% 15%, 28% 0, 52% 9%, 68% 0, 65% 15%, 84% 15%, 84% 29%, 100% 29%, 100% 69%, 88% 69%, 88% 84%, 74% 84%, 74% 100%, 26% 100%, 26% 89%, 12% 89%, 12% 73%, 0 73%);
+#launch:active { cursor: grabbing; }
+#launch:focus-visible {
+  outline: 3px dashed var(--gold);
+  outline-offset: -3px;
+  border-radius: 50%;
 }
-.throw-fruit::before {
-  content: "";
-  position: absolute;
-  inset: 0 12% 57%;
-  background: #497536;
-  clip-path: polygon(0 18%, 32% 22%, 20% 0, 50% 10%, 90% 0, 64% 45%, 100% 60%, 63% 68%, 58% 100%, 38% 72%, 8% 77%, 32% 48%);
-}
-.throw-fruit::after { content: ""; position: absolute; top: 43%; left: 17%; width: 4px; height: 3px; background: #ffe2a0; }
-.throw-chevron {
-  width: 1.05rem;
-  height: 1.3rem;
-  background: currentColor;
-  clip-path: polygon(0 37%, 38% 0, 62% 0, 100% 37%, 100% 60%, 62% 28%, 62% 100%, 38% 100%, 38% 28%, 0 60%);
-}
+#launch:disabled { display: none; }
+#heldTomato { display: block; width: 100%; height: 100%; image-rendering: pixelated; pointer-events: none; }
+#launch[data-empty="true"] #heldTomato { visibility: hidden; }
 
 /* A winner's marquee gives way to a cabinet-style score strip. */
 .score-layout { display: grid; gap: clamp(1rem, 2.6vw, 2rem); align-items: start; }
@@ -236,8 +225,6 @@
   #standings small { grid-column: 3; text-align: start; }
 }
 @media (orientation: landscape) and (max-height: 31rem) {
-  .throw-dock { left: auto; max-width: 55vw; justify-items: end; }
-  #launch { min-height: 3.15rem; }
   .score-layout { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); }
   .victory-stage { grid-template-columns: minmax(0, 1fr); min-height: 0; }
   .victory-stage .mascot-stage { justify-self: end; width: 72%; margin: -.5rem 0 0; }
@@ -249,7 +236,6 @@
     from { opacity: 0; transform: translate(-.8rem, .22rem) rotate(-3deg); }
     to { opacity: 1; transform: none; }
   }
-  .throw-key:enabled:active .throw-fruit { transform: translateY(-3px) rotate(10deg); }
 }
 @media (forced-colors: active) {
   .round-hud, .score-panel, .victory-stage, #arenaHint { border: 1px solid CanvasText; }

@@ -55,7 +55,7 @@
         <h2 id="helpTitle">How to play</h2>
         <ol>
           <li><strong>Gather your crew</strong>Host a room, then have friends scan its QR. Allow camera access so the game can track players.</li>
-          <li><strong>Flick a tomato</strong>Point your camera at a rival. Swipe up from Launch to throw.</li>
+          <li><strong>Flick a tomato</strong>Point your camera at a rival. Swipe the tomato at the bottom of your screen toward them.</li>
           <li><strong>Stay in the fight</strong>Ten hits knock a player out. Check the leaderboard when the round ends.</li>
         </ol>
       </dialog>
@@ -113,10 +113,10 @@
       </dl>
       <div id="roundCountdown" aria-hidden="true" hidden></div>
       <div class="throw-dock">
-        <p id="arenaHint" role="status">Line up a rival, then swipe up from Launch.</p>
+        <p id="arenaHint" role="status"></p>
         <button id="cameraRetryLive" class="game-key sub-key" type="button" hidden>Retry camera</button>
-        <button id="launch" class="game-key throw-key" type="button" aria-label="Launch tomato. Swipe up to throw.">
-          <i class="throw-fruit" aria-hidden="true"></i><span>Launch</span><i class="throw-chevron" aria-hidden="true"></i>
+        <button id="launch" type="button" aria-label="Throw tomato. Swipe up, or press Enter to throw straight ahead." disabled>
+          <canvas id="heldTomato" width="96" height="96" aria-hidden="true"></canvas>
         </button>
       </div>
     </section>

@@ -25,7 +25,7 @@ The Node server serves the site, model, WASM and WebSocket endpoint at `/ws`. Ru
 
 1. Open the same HTTPS site on the host phone, create a room and allow the camera. Other players scan the room QR, tap Join and allow their cameras. The app checks shirt colors briefly with the front camera. The host can also register a single new shirt as a player joins.
 2. If a player shows **Color pending**, tap **Refresh color** on that phone, keeping their face and upper chest in the front camera view. Distinct shirt colors work best for this prototype. Similar shirts, partial bodies or overlapping players can temporarily prevent target selection.
-3. Start the round after every connected player is ready. Point the rear camera at another registered player and flick upward from the tomato. Swipe length and angle set the landing point. Body-attached paint is supported on the torso and upper arms.
+3. Point the rear camera at a registered rival. Their name and health appear above their head. Touch the tomato at the bottom, swipe toward them and lift to throw. The swipe angle and length set the landing point. Hits stick to the tracked head, torso, arms and legs.
 4. Check a shoulder hit from two viewpoints, then turn, cross in front of another player and step back. A reacquired player should still carry the same paint. A temporarily disconnected player has 25 seconds to rejoin their seat. The host role passes to another connected player when necessary.
 5. At the end, compare hits and knockouts across phones. The host can open a rematch in the same room.
 

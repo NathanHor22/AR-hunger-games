@@ -40,6 +40,40 @@ test('rejects lookalike people, ambiguous roster entries, mismatched clothes and
   }
 });
 
+test('only established distinct shirts keep their identity when confidently separated in depth at a crossing', () => {
+  function pose(x, color, scale) {
+    const result = person(x, color);
+    // person() shares its hip object, so resize each landmark independently.
+    result.landmarks = result.landmarks.map(point => ({
+      ...point, x: x + (point.x - x) * scale, y: .25 + (point.y - .25) * scale,
+    }));
+
+    return result;
+  }
+
+  const near = (x, color = .15) => pose(x, color, 1.5);
+  const far = (x, color = .8) => pose(x, color, .65);
+  const left = near(.32), right = far(.63);
+  const match = createMatcher();
+  const step = (poses, t) => match(poses, roster, 'me', t, 640, 480).map(p => p.id);
+
+  assert.deepEqual(step([left, right], 0), [null, null]);
+  step([left, right], 80);
+  assert.deepEqual(step([left, right], 160), ['a', 'b']);
+  assert.deepEqual(step([far(.56), near(.44)], 240), ['b', 'a']);
+  assert.deepEqual(step([near(.53), far(.53)], 320), ['a', 'b']);
+  assert.deepEqual(step([near(.53, .218), far(.53)], 400), [null, null]);
+
+  for (let time = 480; time < 850; time += 80) {
+    assert.deepEqual(step([near(.53), far(.53)], time), [null, null]);
+  }
+
+  step([left, right], 900);
+  step([left, right], 980);
+  assert.deepEqual(step([left, right], 1060), ['a', 'b']);
+  assert.deepEqual(step([near(.45, .8), far(.55, .15)], 1140), [null, null]);
+});
+
 test('host enrolls an unknown person once while previously seen players move', () => {
   const enrollment = createLobbyEnrollment(), sent = [];
   enrollment.update([person(0.2, 0.15)], [], 0);

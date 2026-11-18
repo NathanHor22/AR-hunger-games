@@ -1,5 +1,18 @@
+import { bodyScale } from "./depth.js";
+
 // Each body has the same numbered triangles, even when a limb is out of view.
 const sides = 8;
+
+// Wire IDs are stable: torso first, then paired arm and leg segments, then head.
+const limbs = [
+  [11, 13, 0.29, 0.21], [12, 14, 0.29, 0.21],
+  [13, 15, 0.22, 0.15], [14, 16, 0.22, 0.15],
+  [23, 25, 0.42, 0.28], [24, 26, 0.42, 0.28],
+  [25, 27, 0.28, 0.16], [26, 28, 0.28, 0.16],
+];
+
+const headPart = limbs.length + 1;
+export const bodyTriangleCount = (headPart + 1) * sides * 2;
 const subtract = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
 const length = (v) => Math.hypot(v.x, v.y, v.z);
 
@@ -84,28 +97,14 @@ export function makeBody(landmarks, worldLandmarks, width, height) {
   if (![11, 12, 23, 24].every(visible) || !(width > 0 && height > 0))
     return null;
   const px = (i) => ({ x: landmarks[i].x * width, y: landmarks[i].y * height });
-  const span = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
   const world = worldLandmarks;
-
-  const measuredWorld = [11, 12, 23, 24].every(
-    (i) =>
-      world?.[i] && [world[i].x, world[i].y, world[i].z].every(Number.isFinite),
-  );
-
-  const worldSpan = measuredWorld
-    ? span(world[11], world[23]) + span(world[12], world[24])
-    : 0;
-
-  const scale =
-    worldSpan > 0.05
-      ? (span(px(11), px(23)) + span(px(12), px(24))) / worldSpan
-      : 0;
+  const depth = bodyScale(landmarks, world, width, height);
 
   const point = (i) => ({
     ...px(i),
     z:
-      scale && Number.isFinite(world[i]?.z)
-        ? world[i].z * scale
+      depth && Number.isFinite(world?.[i]?.z)
+        ? world[i].z * depth.pixelsPerMeter
         : (landmarks[i].z ?? 0) * width,
   });
 
@@ -123,7 +122,7 @@ export function makeBody(landmarks, worldLandmarks, width, height) {
   if (!front) return null;
   const lateral = unit(cross(front, axis));
   const radius = length(shoulders) / 2;
-  const body = { faces: [], visible: [], radius, width, height };
+  const body = { faces: [], visible: [], radius, width, height, ...depth };
   addSurface(
     body,
     0,
@@ -135,29 +134,34 @@ export function makeBody(landmarks, worldLandmarks, width, height) {
     [radius * 0.56, radius * 0.53],
   );
 
-  for (const [part, shoulder, end] of [
-    [1, ls, 13],
-    [2, rs, 14],
-  ]) {
-    if (!visible(end)) continue;
+  for (const [index, [start, end, upper, lower]] of limbs.entries()) {
+    if (!visible(start) || !visible(end)) continue;
+    const a = point(start), b = point(end);
+    const along = unit(subtract(b, a));
 
-    const elbow = point(end),
-      armAxis = unit(subtract(elbow, shoulder));
+    if (!along) continue;
+    const side = unit(cross(front, along));
 
-    if (!armAxis) continue;
-    const armSide = unit(cross(front, armAxis));
+    if (!side) continue;
+    const widths = [radius * upper, radius * lower];
+    addSurface(body, index + 1, a, b, side, cross(along, side), widths, widths);
+  }
 
-    if (!armSide) continue;
-    addSurface(
-      body,
-      part,
-      shoulder,
-      elbow,
-      armSide,
-      cross(armAxis, armSide),
-      [radius * 0.29, radius * 0.21],
-      [radius * 0.29, radius * 0.21],
-    );
+  if ([2, 5, 7, 8, 9, 10].every(visible)) {
+    const ears = subtract(point(7), point(8));
+    const middle = midpoint(point(7), point(8));
+    const down = unit(subtract(midpoint(point(9), point(10)), midpoint(point(2), point(5))));
+    const faceFront = down && unit(cross(down, ears));
+
+    if (faceFront) {
+      const half = Math.min(radius * .66, length(ears) * .57);
+
+      const level = (d) => ({ x: middle.x + down.x * half * d,
+        y: middle.y + down.y * half * d, z: middle.z + down.z * half * d });
+
+      addSurface(body, headPart, level(-1.35), level(1.12), cross(faceFront, down),
+        faceFront, [half * .9, half * .79], [half, half * .94]);
+    }
   }
 
   body.visible.sort((a, b) => b.z - a.z);
@@ -286,7 +290,7 @@ let paintLayer;
 
 export function drawPaint(ctx, body, stains, constrainPaint) {
   if (!body?.visible.length || !stains?.length) return;
-  const byPart = [[], [], []];
+  const byPart = Array.from({ length: headPart + 1 }, () => []);
 
   for (const stain of stains) {
     const face = body.faces[stain.triangle];

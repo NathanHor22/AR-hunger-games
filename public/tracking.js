@@ -1,6 +1,30 @@
 import { createPoseTracks } from './pose-tracks.js';
 
 async function createInference() {
+  let surface, context;
+
+  function modelInput(video) {
+    const w = video.videoWidth, h = video.videoHeight;
+    const scale = Math.min(1, 320 / Math.min(w,h), 640 / Math.max(w,h));
+
+    if (scale === 1) return video;
+    const width = Math.max(1, Math.round(w * scale)), height = Math.max(1, Math.round(h * scale));
+
+    if (!surface) {
+      surface = globalThis.OffscreenCanvas ? new OffscreenCanvas(width,height) : document.createElement('canvas');
+      context = surface.getContext('2d', { alpha:false });
+    }
+
+    if (!context) return video;
+
+    if (surface.width !== width) surface.width = width;
+
+    if (surface.height !== height) surface.height = height;
+    context.drawImage(video, 0,0,width,height);
+
+    return surface;
+  }
+
   if (globalThis.Worker && globalThis.OffscreenCanvas && globalThis.createImageBitmap) {
     let worker;
     let rejectPending;
@@ -20,7 +44,8 @@ async function createInference() {
 
       return {
         async detect(video) {
-          const frame = await createImageBitmap(video);
+          const input = modelInput(video);
+          const frame = input.transferToImageBitmap ? input.transferToImageBitmap() : await createImageBitmap(input);
 
           try {
             if (closed) throw new Error('Tracking stopped');
@@ -43,7 +68,9 @@ async function createInference() {
 
   const { openDetector } = await import('./pose-worker.js');
 
-  return openDetector();
+  const detector = await openDetector();
+
+  return { detect:video => detector.detect(modelInput(video)), close:detector.close };
 }
 
 export function createTracker(video, { onFrame = () => {}, onStatus = () => {} } = {}) {
@@ -80,7 +107,7 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
           const result = await inference.detect(video);
 
           if (token !== generation) return;
-          const people = tracks.update(result.people, capturedAt, width, height);
+          const people = tracks.update(result.people, capturedAt, width, height, performance.now());
           latest = { people, capturedAt };
           onFrame(people, capturedAt);
         }

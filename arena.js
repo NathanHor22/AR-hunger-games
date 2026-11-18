@@ -26,6 +26,24 @@ export function project(points, vw, vh, width, height) {
   }));
 }
 
+// Fade the last measured pose through one interrupted inference interval.
+// Input still requires a current positive detection and enforces both deadlines.
+export function poseOpacity(now, capturedAt, deliveredAt, missedAt = Infinity) {
+  if (!Number.isFinite(capturedAt)) return 0;
+  const nextFrame = Math.max(450, Math.min(760, deliveredAt - capturedAt + 90));
+  const overdue = Math.max(0, now - capturedAt - 1500, now - deliveredAt - nextFrame, now - missedAt);
+
+  return Math.max(0, 1 - overdue / 200);
+}
+
+// A slow detector can deliver a measurement from the tap after the finger lifts.
+// Measurements from before the tap window may be followed by a closer capture.
+export function tapWindow(tapAt, capturedAt, deliveredAt) {
+  if (deliveredAt - tapAt > 900 || capturedAt - tapAt > 325) return "expired";
+
+  return capturedAt < tapAt - 400 ? "wait" : "resolve";
+}
+
 function surfaceAt(people, x, y, camera, mask) {
   if (!mask) return null;
   const col = Math.floor(((x - camera.x) * mask.width) / camera.width);
@@ -261,6 +279,7 @@ export function createArena({
 
   let frameAt = -Infinity,
     deliveredAt = -Infinity,
+    missedAt = Infinity,
     lastPose = -Infinity;
 
   let sceneWidth = 0,
@@ -269,6 +288,7 @@ export function createArena({
     animation = 0;
 
   let pressing = null,
+    pendingTap,
     keyboardAim,
     nextAt = 0,
     audio;
@@ -278,6 +298,7 @@ export function createArena({
 
   function clearInput() {
     pressing = null;
+    pendingTap = null;
   }
 
   function setState(next, id) {
@@ -340,8 +361,8 @@ export function createArena({
     return (
       video.videoWidth > 0 &&
       video.videoHeight > 0 &&
-      now - frameAt <= 700 &&
-      now - deliveredAt <= 450
+      missedAt === Infinity &&
+      now - frameAt <= 700 && now - deliveredAt <= 450
     );
   }
 
@@ -349,6 +370,9 @@ export function createArena({
     const armed = canSpray();
 
     if ((!armed && !(initial && canIdentify())) || now < nextAt) return;
+
+    if (pendingTap && now - pendingTap.at <= 900 && !initial) return;
+    pendingTap = null;
     nextAt = now + sprayIntervalMs;
 
     const width = canvas.clientWidth,
@@ -356,7 +380,8 @@ export function createArena({
 
     let hit = null;
 
-    if (width && height && fresh(now)) {
+    if (width && height && video.videoWidth && video.videoHeight &&
+        missedAt === Infinity && poseOpacity(now, frameAt, deliveredAt) > 0) {
       prepareScene(width, height);
 
       const tag = initial && nameTags.find(({ left, right, top, bottom, trackId }) =>
@@ -364,6 +389,17 @@ export function createArena({
         scene.some((person) => person.trackId === trackId && !person.player));
 
       hit = tag ? { trackId: tag.trackId } : contactAt(scene, point.x, point.y, camera, mask);
+
+      if (hit?.targetId && !fresh(now)) {
+        if (armed) {
+          const person = scene.find((p) => p.player?.id === hit.targetId);
+          pendingTap = { point: { x: point.x, y: point.y }, at: now, targetId: hit.targetId, trackId: person.trackId };
+
+          return;
+        }
+
+        hit = null;
+      }
     }
 
     if (hit?.trackId != null) {
@@ -379,6 +415,10 @@ export function createArena({
 
     if (!hit && initial && (!fresh(now) || !scene.length))
       message("Frame the player’s upper body, then tap them.");
+    emitSpray(point, now, hit);
+  }
+
+  function emitSpray(point, now, hit) {
     let color = room.players.find((p) => p.id === myId)?.color || "#fff2d2";
     let radius = 8;
 
@@ -411,6 +451,31 @@ export function createArena({
     splatSound(audio, hit ? 335 : 205, hit ? 0.037 : 0.017);
   }
 
+  function checkPending(now) {
+    if (!pendingTap) return;
+    const tap = pendingTap;
+    const timing = tapWindow(tap.at, frameAt, now);
+    const width = canvas.clientWidth, height = canvas.clientHeight;
+
+    if (timing === "expired" || !canSpray() || !width || !height || !video.videoWidth || !video.videoHeight) {
+      pendingTap = null;
+
+      return;
+    }
+
+    prepareScene(width, height);
+    const hit = contactAt(scene, tap.point.x, tap.point.y, camera, mask);
+    const person = hit?.targetId && scene.find((p) => p.player?.id === hit.targetId);
+
+    if (!person || hit.targetId !== tap.targetId || person.trackId !== tap.trackId) {
+      pendingTap = null;
+    } else if (timing === "resolve") {
+      pendingTap = null;
+      nextAt = now + sprayIntervalMs;
+      emitSpray(tap.point, now, hit);
+    }
+  }
+
   function draw(time) {
     const width = canvas.clientWidth,
       height = canvas.clientHeight;
@@ -435,12 +500,12 @@ export function createArena({
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    if (pressing && !canSpray()) clearInput();
+    if ((pressing || pendingTap) && !canSpray()) clearInput();
 
     if (pressing) spray(pressing, time);
-    const visible = fresh(time);
+    const opacity = video.videoWidth && video.videoHeight ? poseOpacity(time, frameAt, deliveredAt, missedAt) : 0;
 
-    if (visible) {
+    if (opacity > 0) {
       prepareScene(width, height);
 
       if (paintDirty) {
@@ -457,13 +522,17 @@ export function createArena({
           drawStains(paint, scene, mask, camera, silhouette);
       }
 
-      if (scene.length) ctx.drawImage(overlay, 0, 0);
+      if (scene.length) {
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(overlay, 0, 0);
+        ctx.globalAlpha = 1;
+      }
     }
 
     while (bursts.length && time - bursts[0].at >= 290) bursts.shift();
 
     for (const burst of bursts) {
-      const point = anchoredPoint(visible ? scene : [], burst);
+      const point = anchoredPoint(fresh(time) ? scene : [], burst);
 
       if (point)
         drawSpray(
@@ -497,7 +566,9 @@ export function createArena({
       ctx.restore();
     }
 
-    nameTags = visible ? drawNameplates(ctx, scene, width, height, reserved) : [];
+    ctx.globalAlpha = opacity;
+    nameTags = opacity > 0 ? drawNameplates(ctx, scene, width, height, reserved) : [];
+    ctx.globalAlpha = 1;
 
     if (keyboardAim) {
       ctx.save();
@@ -548,7 +619,9 @@ export function createArena({
     if (pressing?.id === e.pointerId) clearInput();
   }
 
-  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointerup", (e) => {
+    if (pressing?.id === e.pointerId) pressing = null;
+  });
   canvas.addEventListener("pointercancel", release);
   canvas.addEventListener("lostpointercapture", release);
   canvas.addEventListener("keydown", (e) => {
@@ -586,7 +659,7 @@ export function createArena({
   });
   canvas.addEventListener("keyup", (e) => {
     if (pressing?.id === "keyboard" && (e.key === " " || e.key === "Enter"))
-      clearInput();
+      pressing = null;
   });
   canvas.addEventListener("click", (e) => {
     if (e.detail === 0 && (canSpray() || canIdentify()))
@@ -622,12 +695,25 @@ export function createArena({
       inkedUntil = now + 1150;
       inkedColor = me.color;
     },
-    setPeople(value, capturedAt = performance.now()) {
+    setPeople(value, capturedAt) {
+      const now = performance.now();
+
+      if (capturedAt != null && !value.length) {
+        missedAt = Math.min(missedAt, now);
+        pendingTap = null;
+
+        return;
+      }
+
       people = value;
-      frameAt = capturedAt;
+      frameAt = capturedAt ?? now;
+      missedAt = Infinity;
       // Naming a player can republish the same capture with a new identity.
       lastPose = -Infinity;
-      deliveredAt = performance.now();
+      deliveredAt = now;
+
+      if (value.length) checkPending(now);
+      else pendingTap = null;
     },
     start() {
       if (!animation) animation = requestAnimationFrame(draw);

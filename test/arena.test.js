@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { project, contactAt } from "../arena.js";
+import { createArena, project, contactAt, poseOpacity, tapWindow } from "../arena.js";
 import { makeBody } from "../public/body.js";
 
 const camera = { x: -160, y: 0, width: 640, height: 480 };
+
+test("display fades across a slow detection or brief loss and expires even as empty frames continue", () => {
+  assert.equal(poseOpacity(600, 0, 200), 1);
+  assert.equal(poseOpacity(700, 0, 200), .75);
+  assert.equal(poseOpacity(850, 0, 200), 0);
+  assert.equal(poseOpacity(1400, 0, 700), 1);
+  assert.equal(poseOpacity(1560, 0, 700), .5);
+  assert.equal(poseOpacity(1800, 0, 700), 0);
+  assert.equal(poseOpacity(700, 500, 560, 600), .5);
+  assert.equal(poseOpacity(800, 500, 560, 600), 0);
+});
+
+test("a delayed tap uses capture time, rejects late delivery, and can wait past an older in-flight frame", () => {
+  assert.equal(tapWindow(1500, 1000, 1650), "wait");
+  assert.equal(tapWindow(1500, 1200, 1840), "resolve");
+  assert.equal(tapWindow(1500, 1700, 2320), "resolve");
+  assert.equal(tapWindow(1500, 1850, 2300), "expired");
+  assert.equal(tapWindow(1500, 1600, 2450), "expired");
+});
 
 function contestant(id, confidence = 1) {
   const marks = Array.from({ length: 33 }, () => ({
@@ -32,6 +51,7 @@ function contestant(id, confidence = 1) {
   };
 
   return {
+    landmarks: marks,
     body,
     mask,
     player: { id, connected: true, spectator: false, health: 10 },
@@ -49,6 +69,88 @@ test("camera cover crops each axis around the center without distorting the body
   assert.deepEqual(portrait[1], { x: 1, y: 0.75, z: 0 });
   const landscape = project(marks, 640, 480, 640, 240);
   assert.deepEqual(landscape[0], { x: 0.25, y: 0, z: 0.1 });
+});
+
+test("a released tap can settle once from slow inference; loss, changed identity, cancel and timeout discard it", (t) => {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+
+  const canvas = Object.assign(new EventTarget(), {
+    clientWidth:320, clientHeight:480, getContext:() => ({}),
+    getBoundingClientRect:() => ({left:0, top:0}), setPointerCapture() {},
+  });
+
+  const browser = { window:new EventTarget(), matchMedia:() => ({matches:false}),
+    document:Object.assign(new EventTarget(), {
+      createElement:() => canvas, querySelector:() => canvas, getElementById:() => canvas,
+    }) };
+
+  for (const [key, value] of Object.entries(browser)) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, {configurable:true, value});
+    t.after(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; });
+  }
+
+  const person = { ...contestant("rival"), id:"rival", trackId:1 };
+  const sprays = [], identified = [];
+
+  const arena = createArena({
+    video:{videoWidth:640, videoHeight:480}, canvas, canSpray:() => true,
+    onIdentify:trackId => identified.push(trackId), message() {},
+    send(event) {
+      sprays.push(event);
+
+      return true;
+    },
+  });
+
+  arena.setState({phase:"playing", code:"123456", round:1, players:[person.player]}, "self");
+
+  const pointer = type => canvas.dispatchEvent(Object.assign(new Event(type), {
+    pointerId:1, isPrimary:true, button:0, clientX:140, clientY:186,
+  }));
+
+  function tapDuringInference(release = "pointerup") {
+    now += 1000;
+    arena.setPeople([person], now - 650);
+    now += 250;
+    pointer("pointerdown");
+    pointer(release);
+  }
+
+  tapDuringInference();
+  assert.equal(sprays.length, 0);
+  now += 190;
+  arena.setPeople([person], now - 300);
+  arena.setPeople([person], now - 300);
+  assert.equal(sprays.length, 1);
+  assert.equal(sprays[0].targetId, "rival");
+
+  tapDuringInference();
+  arena.setPeople([], now - 50);
+  arena.setPeople([person], now);
+  tapDuringInference();
+  arena.setPeople([{ ...person, trackId:2 }], now);
+  arena.setPeople([person], now);
+  tapDuringInference("pointercancel");
+  arena.setPeople([person], now);
+  tapDuringInference();
+  now += 950;
+  arena.setPeople([person], now - 860);
+  assert.equal(sprays.length, 1);
+
+  now += 1000;
+  arena.setPeople([{ ...person, id:null }], now - 650);
+  now += 250;
+  pointer("pointerdown");
+  pointer("pointerup");
+  assert.deepEqual(identified, [1]);
+  now += 190;
+  arena.setPeople([], now);
+  pointer("pointerdown");
+  pointer("pointerup");
+  assert.deepEqual(identified, [1]);
+  assert.equal(sprays.length, 1);
 });
 
 test("contact needs a visible triangle and matching silhouette in uncropped camera space", () => {

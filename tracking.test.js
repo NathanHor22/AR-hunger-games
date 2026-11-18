@@ -81,6 +81,28 @@ test('clearly different depths retain spatial identity through overlap', () => {
   assert.deepEqual(step(360,.49,.49,true).map(p=>p.id), ['b','a']);
 });
 
+test('slow continuous inference preserves a stable name, while a pause, loss or large jump clears it', () => {
+  const tracks = createPoseTracks();
+  tracks.setRoster(roster('me','a','b'), 'me');
+  const frame = (capture, delivery, ...xs) => tracks.update(xs.map(x => person(x)),capture,640,480,delivery);
+  frame(0,700,.25,.75);
+  const [a,b] = frame(715,1415,.26,.74);
+  assert.ok(a.trackId && b.trackId);
+  assert.equal(tracks.assign(a.trackId,'a',1440),true);
+  assert.equal(tracks.assign(b.trackId,'b',1440),true);
+  assert.deepEqual(frame(1430,2130,.73,.27).map(p => p.id),['b','a']);
+  // A large move may be a different person. A missing slow frame also breaks continuity.
+  assert.deepEqual(frame(2150,2850,.60).map(p => p.id),[null]);
+  assert.deepEqual(frame(2865,3565,.73,.27).map(p => p.id),[null,null]);
+  const confirmed = frame(3580,4280,.73,.27);
+  assert.equal(tracks.assign(confirmed[0].trackId,'b',4300),true);
+  // Capturing after an idle pause discards even a body in the same place.
+  assert.deepEqual(frame(4820,5000,.73,.27).map(p => p.id),[null,null]);
+  const fresh = frame(5015,6450,.73,.27);
+  assert.equal(tracks.assign(fresh[0].trackId,'b',6460),false);
+  assert.deepEqual(frame(6470,6700,.73,.27).map(p => p.trackId),[null,null]);
+});
+
 test('reset and removal invalidate IDs immediately; duplicate colors and spectators cannot claim a rival', () => {
   const tracks = createPoseTracks();
   tracks.setRoster([...roster('me','a','b'), {id:'s',connected:true,spectator:true}], 'me');

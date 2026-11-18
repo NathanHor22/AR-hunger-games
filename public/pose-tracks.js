@@ -1,6 +1,7 @@
 import { bodyScale, clearlyInFront } from './depth.js';
 
 const maxGap = 650;
+const maxSlowGap = 1250;
 
 function torso(person, width, height) {
   const points = person.landmarks || [];
@@ -73,11 +74,21 @@ export function createPoseTracks() {
     }
   }
 
-  function update(people, now, width, height) {
-    const old = tracks.filter(t => now - t.at <= maxGap);
+  function update(people, now, width, height, deliveredAt = now) {
+    // A busy detector can occupy most of the interval between captures. Only
+    // extend a continuously visible track if the next capture followed its result.
+    const old = tracks.filter(t => now - t.at <= maxGap || (t.visible
+      && now - t.at <= maxSlowGap && now - t.deliveredAt <= 250));
+
     const boxes = people.map(p => torso(p, width, height));
     const blocked = boxes.map((box, i) => !box || boxes.some((b,j) => i !== j && crowded(box,b)));
-    const costs = boxes.map(box => old.map(t => box ? matchCost(box, t.box) : Infinity));
+
+    const costs = boxes.map(box => old.map(t => {
+      const cost = box ? matchCost(box, t.box) : Infinity;
+
+      return now - t.at > maxGap && cost > .4 ? Infinity : cost;
+    }));
+
     const oldChoices = old.map((_, j) => uniqueBest(costs.map(row => row[j])));
     const next = [];
 
@@ -89,7 +100,7 @@ export function createPoseTracks() {
       const solo = people.length === 1 ? (prior?.solo || 0) + 1 : 0;
 
       const track = { trackId:prior?.trackId ?? nextId++, playerId:prior?.playerId ?? null,
-        seen, solo, at:now, box:boxes[i], visible:true };
+        seen, solo, at:now, deliveredAt, box:boxes[i], visible:true };
 
       if (solo >= 2 && rivals.length === 1 && rivals[0].connected
         && !old.some(t => t.trackId !== track.trackId && t.playerId === rivals[0].id)) {
@@ -118,7 +129,8 @@ export function createPoseTracks() {
   }
 
   function assign(trackId, playerId, now) {
-    const track = tracks.find(t => t.trackId === trackId && t.visible && t.seen >= 2 && now - t.at <= maxGap);
+    const track = tracks.find(t => t.trackId === trackId && t.visible && t.seen >= 2
+      && now - t.deliveredAt <= maxGap && now - t.at <= maxSlowGap);
 
     if (!track || !rivals.some(p => p.id === playerId && p.connected)) return false;
 

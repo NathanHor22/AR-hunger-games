@@ -37,7 +37,7 @@ test('a turned head uses the torso axis; missing lower landmarks do not hide a v
   assert.equal(headAnchor(points, 400, 800), null);
 });
 
-test('overlapping rivals each get a name, health count and ten pips clear of the HUD', () => {
+test('overlapping rivals show painted coverage and a stable unassigned person can be named', () => {
   const boxes = [], text = [], pips = [];
 
   const ctx = {
@@ -52,18 +52,20 @@ test('overlapping rivals each get a name, health count and ten pips clear of the
   };
 
   const scene = [
-    { points: pose(.45), player: { connected: true, name: 'Ray', health: 7, color: 'red' } },
-    { points: pose(.47), player: { connected: true, name: 'Jo', health: 0, color: 'blue' } },
+    { points: pose(.45), player: { connected: true, name: 'Ray', coverage: 18.3, color: 'red' } },
+    { points: pose(.47), player: { connected: true, name: 'Jo', coverage: 0, color: 'blue' } },
     { points: pose(), player: { connected: false, name: 'Offline' } },
     { points: pose(), player: { connected: true, spectator: true, name: 'Observer' } },
     { points: pose(), player: null },
+    { points: pose(.87), player: null, trackId: 4 },
   ];
 
   const hud = { left: 50, right: 230, top: 62, bottom: 90 };
-  drawNameplates(ctx, scene, 320, 420, [hud]);
-  assert.deepEqual(text, ['Ray', '7/10', 'Jo', '0/10']);
-  assert.equal(pips.length, 20);
-  assert.equal(pips.filter(color => color === 'red').length, 7);
+  const unnamed = drawNameplates(ctx, scene, 320, 420, [hud]);
+  assert.deepEqual(unnamed, [{ ...boxes[2], trackId: 4 }]);
+  assert.deepEqual(text, ['Ray', '18.3%', 'Jo', '0%', 'Tap to name']);
+  assert.equal(pips.length, 3);
+  assert.equal(pips.filter(color => color === 'red').length, 1);
   assert.equal(pips.filter(color => color === 'blue').length, 0);
   const clears = (a, b) => a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom;
   assert.ok(clears(boxes[0], boxes[1]));

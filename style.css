@@ -97,19 +97,13 @@ button:disabled { cursor: default; }
 }
 .mascot-stage canvas { display: block; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
 
-/* Enrollment needs a mounted video, and live targeting uses the exact camera rectangle. */
+/* The camera and paint overlay share the same viewport. */
 #video, #arena { position: fixed; inset: 0; width: 100%; height: 100%; }
 #video { display: block; z-index: 0; opacity: 0; object-fit: cover; object-position: center; pointer-events: none; }
 body[data-screen="arena"] { background: #191423; }
 body[data-screen="arena"] #video { opacity: 1; }
 #arena { z-index: 1; isolation: isolate; }
 #overlay { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
-body:is([data-screen="lobby"],[data-screen="arena"])[data-sampling="true"] #video {
-  inset: max(5.1rem, calc(env(safe-area-inset-top) + 4.65rem)) max(.8rem, env(safe-area-inset-right)) auto auto;
-  width: min(150px, 38vw); height: min(165px, 31dvh); z-index: 8; opacity: 1;
-  transform: scaleX(-1); object-fit: contain; background: var(--night);
-  border: 3px solid var(--lilac); box-shadow: 3px 4px 0 #17121f;
-}
 body[data-screen="arena"] .masthead {
   position: fixed; top: max(.65rem, env(safe-area-inset-top)); right: max(.65rem, env(safe-area-inset-right)); background: transparent;
 }

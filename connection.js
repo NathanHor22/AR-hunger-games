@@ -1,3 +1,5 @@
+import { inkStandings } from './public/ink.js';
+
 const sessionKey = 'tomato-riot.welcome';
 const firstRetryMs = 250;
 const maxRetryMs = 4000;
@@ -11,7 +13,7 @@ function validWelcome(message) {
     && /^\d{6}$/.test(message.code);
 }
 
-export function createConnection({ onState, onWelcome, onStatus, onReset }) {
+export function createConnection({ onState, onWelcome, onStatus, onReset, onPaint }) {
   const browser = window;
   let saved = null;
   let handshake = null;
@@ -19,6 +21,7 @@ export function createConnection({ onState, onWelcome, onStatus, onReset }) {
   let welcomed = false;
   let timer;
   let retryMs = firstRetryMs;
+  let lastRoom, waitingForSync = false;
 
   try {
     const stored = JSON.parse(browser.sessionStorage.getItem(sessionKey));
@@ -45,6 +48,8 @@ export function createConnection({ onState, onWelcome, onStatus, onReset }) {
     const previous = socket;
     socket = null;
     welcomed = false;
+    lastRoom = null;
+    waitingForSync = false;
     previous?.close();
   }
 
@@ -178,7 +183,31 @@ export function createConnection({ onState, onWelcome, onStatus, onReset }) {
         browser.clearTimeout(timer);
         timer = undefined;
         retryMs = firstRetryMs;
-        onState(message.room);
+        lastRoom = message.room;
+        waitingForSync = false;
+        onState(lastRoom);
+      } else if (message?.type === 'paint' && welcomed && lastRoom?.phase === 'playing'
+        && lastRoom.code === message.code && lastRoom.round === message.round && message.seq > lastRoom.paintSeq) {
+        if (waitingForSync) return;
+
+        if (message.seq !== lastRoom.paintSeq + 1) {
+          waitingForSync = write({ type: 'sync' });
+
+          return;
+        }
+
+        const players = lastRoom.players.map(p => {
+          if (p.id === message.shooterId) return { ...p, score: message.score, hits: message.hits };
+
+          if (p.id === message.targetId) return { ...p, coverage: message.coverage,
+            splats: message.splat ? [...p.splats, message.splat] : p.splats };
+
+          return p;
+        });
+
+        lastRoom = { ...lastRoom, players, paintSeq: message.seq, serverNow: message.serverNow, leaderboard: inkStandings(players) };
+        onState(lastRoom);
+        onPaint?.(message);
       } else if (message?.type === 'error') {
         if (!welcomed || message.code === 'ROOM_NOT_FOUND' || message.code === 'INVALID_TOKEN') {
           reset(message.message);
@@ -211,12 +240,12 @@ export function createConnection({ onState, onWelcome, onStatus, onReset }) {
     get connected() {
       return welcomed && socket?.readyState === browser.WebSocket.OPEN;
     },
-    enter({ type, code, name }) {
+    enter({ type, code, name, color }) {
       const roomCode = String(code ?? '').trim();
 
       if (type === 'join' && roomCode && restore(roomCode)) return;
       save(null);
-      begin(type === 'join' ? { type, code: roomCode, name } : { type, name });
+      begin(type === 'join' ? { type, code: roomCode, name, color } : { type, name, color });
     },
     restore,
     send(message) {

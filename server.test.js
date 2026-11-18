@@ -4,8 +4,6 @@ import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { createGameServer } from './server.js';
 
-const redShirt = [0.82, 0.49, 0.35, 0.81, 0.49, 0.36, 0.79, 0.48, 0.34, 0.8, 0.48, 0.33];
-const blueShirt = [0.45, 0.8, 0.32, 0.43, 0.8, 0.31, 0.44, 0.79, 0.31, 0.46, 0.8, 0.32];
 
 async function arena(t) {
   let time = 100_000;
@@ -57,76 +55,75 @@ async function arena(t) {
   };
 }
 
-test('round, identity, idempotent hits, rematch and secure recovery', { timeout: 8000 }, async (t) => {
+test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rematch', { timeout: 8000 }, async t => {
   const game = await arena(t);
-  const a = await game.connect({ type: 'create', name: 'A' });
-  const owner = await a.wait((m) => m.type === 'welcome');
-  const b = await game.connect({ type: 'join', name: 'B', code: owner.code });
-  const peer = await b.wait((m) => m.type === 'welcome');
-  b.send({ type: 'descriptor', targetId: owner.playerId, descriptor: blueShirt });
-  assert.equal((await b.wait((m) => m.type === 'error')).code, 'INVALID_ACTION');
-  a.send({ type: 'descriptor', targetId: peer.playerId, descriptor: blueShirt });
-  const enrolled = await a.state((r) => r.players[1]?.descriptor);
-  assert.deepEqual(enrolled.players[1].descriptor, blueShirt);
+  const green = '#49e066';
+  const a = await game.connect({ type: 'create', name: 'A', color: '#319cff' });
+  const owner = await a.wait(m => m.type === 'welcome');
+  const b = await game.connect({ type: 'join', name: 'B', code: owner.code, color: '#a369ff' });
+  const peer = await b.wait(m => m.type === 'welcome');
+  b.send({ type: 'color', color: green });
+  const enrolled = await a.state(r => r.players[1]?.color === green);
+  assert.ok(enrolled.players.every(p => !('descriptor' in p) && !p.ready));
   assert.ok(!JSON.stringify(enrolled).includes(peer.token));
-  a.send({ type: 'ready', ready: true });
-  b.send({ type: 'ready', ready: true });
-  await a.state((r) => r.players.length === 2 && r.players.every((p) => p.ready));
-  a.send({ type: 'start' });
-  assert.match((await a.wait((m) => m.type === 'error')).message, /shirt color/);
-  a.send({ type: 'descriptor', descriptor: redShirt });
-  await a.state((r) => r.phase === 'lobby' && r.players[0].descriptor);
-  a.send({ type: 'start' });
-  const started = await a.state((r) => r.phase === 'playing');
+  a.send({ type:'color', color: green });
+  await a.state(r => r.players.every(p => p.color === green));
+  b.send({ type:'color', color:'invalid' });
+  await b.wait(m => m.type === 'error');
+  a.send({ type:'start' });
+  const started = await a.state(r => r.phase === 'playing');
   const round = started.round;
   assert.equal(started.startsAt - started.serverNow, 3000);
+  const hit = (id, triangle = 2) => ({ type:'spray', round, shotId:id, targetId:peer.playerId, anchor:{ triangle, u:.1, v:.45 } });
+  a.send(hit('in-countdown'));
+  a.send({type:'sync'});
+  await a.state(r => r.phase === 'playing' && r.paintSeq === 0);
   game.advance(3000);
-  const late = await game.connect({ type: 'join', code: owner.code });
-  await late.state((r) => r.players[2]?.spectator);
-  const anchor = { triangle: 2, u: 0.1, v: 0.55 };
+  a.send(hit('first'));
+  const first = await b.wait(m => m.type === 'paint');
+  assert.ok(first.score > 0 && first.coverage > 0);
+  assert.equal(first.splat.color, green);
+  a.send(hit('first')); // Exact replays can never score.
+  a.send(hit('second'));
+  const repeat = await b.wait(m => m.type === 'paint');
+  assert.equal(repeat.score, first.score);
+  assert.equal(repeat.coverage, first.coverage);
+  assert.equal(repeat.hits, 2);
+  assert.equal(repeat.splat, undefined);
+  a.send(hit('over-budget', 152)); // Only two packets may arrive together.
+  a.send({type:'sync'});
+  await a.state(r => r.paintSeq === 2);
+  game.advance(180);
+  a.send(hit('head', 152));
+  const spread = await b.wait(m => m.type === 'paint');
+  assert.ok(spread.score > repeat.score && spread.coverage > repeat.coverage);
+  assert.equal(spread.splat.triangle, 152);
 
-  // An acknowledgement from the same connection orders the launch before advancing the test clock.
-  for (let n = 1; n <= 10; n++) {
-    game.advance(400);
-    const shotId = 'shot' + n;
-    a.send({ type: 'throw', round, shotId });
-    a.send({ type: 'throw', round, shotId: shotId + '-cooldown' });
-    a.send({ type: 'barrier' });
-    await a.wait((m) => m.type === 'error');
-    game.advance(200);
-    const surface = n % 2 ? anchor : { ...anchor, triangle: 152 };
-    const impact = { type: 'impact', round, shotId, targetId: peer.playerId, anchor: surface };
-    a.send({ ...impact, shotId: shotId + '-cooldown' });
-    a.send(impact);
-    a.send(impact);
-    const state = await a.state((r) => r.players[0].hits === n);
-    assert.equal(state.players[1].health, 10 - n);
-    assert.equal(state.players[1].splats.length, n);
-    assert.equal(state.players[1].splats.at(-1).triangle, surface.triangle);
-
-    if (n === 10) {
-      assert.equal(state.phase, 'finished');
-      assert.equal(state.players[0].eliminations, 1);
-      assert.deepEqual(
-        state.leaderboard.map((row) => row.id),
-        [owner.playerId, peer.playerId],
-      );
-    }
+  for (let i=0; i<12; i++) {
+    game.advance(180);
+    a.send(hit('pulse-'+i));
+    await b.wait(m => m.type === 'paint' && m.hits === 4+i);
   }
 
   a.ws.close();
-  await b.state((r) => r.hostId === peer.playerId);
-  const resumed = await game.connect({ type: 'resume', code: owner.code, token: owner.token });
-  assert.equal((await resumed.wait((m) => m.type === 'welcome')).playerId, owner.playerId);
-  b.send({ type: 'rematch' });
-  const reset = await resumed.state((r) => r.phase === 'lobby');
-  assert.equal(reset.players[1].health, 10);
-  assert.equal(reset.players[1].splats.length, 0);
-  assert.ok(reset.players.every((p) => !p.spectator && !p.ready));
-  b.send({ type: 'start' });
-  assert.match((await b.wait((m) => m.type === 'error')).message, /ready camera/);
-  const intruder = await game.connect({ type: 'resume', code: owner.code, token: 'guess' });
-  assert.equal((await intruder.wait((m) => m.type === 'error')).code, 'INVALID_TOKEN');
+  const saved = await b.state(r => r.hostId === peer.playerId);
+  assert.equal(saved.phase,'playing');
+  assert.equal(saved.players[1].splats.length,2);
+  assert.equal(saved.players[1].health,10);
+  assert.equal(saved.leaderboard[0].score,spread.score);
+  const resumed = await game.connect({ type:'resume', code:owner.code, token:owner.token });
+  assert.equal((await resumed.wait(m => m.type === 'welcome')).playerId,owner.playerId);
+  const replay = await resumed.state(r => r.phase === 'playing');
+  assert.equal(replay.paintSeq,saved.paintSeq);
+  assert.deepEqual(replay.players[1].splats,saved.players[1].splats);
+  game.advance(90_001);
+  const result = await resumed.state(r => r.phase === 'finished');
+  assert.deepEqual(result.leaderboard.map(p => p.rank),[1,2]);
+  b.send({type:'rematch'});
+  const reset = await resumed.state(r => r.phase === 'lobby');
+  assert.ok(reset.players.every(p => !p.splats.length && !p.score && !p.coverage && p.color === green));
+  const intruder = await game.connect({type:'resume', code:owner.code, token:'guess'});
+  assert.equal((await intruder.wait(m => m.type === 'error')).code,'INVALID_TOKEN');
 });
 
 test(
@@ -137,8 +134,8 @@ test(
     const a = await game.connect({ type: 'create' });
     const { code, token } = await a.wait((m) => m.type === 'welcome');
     const b = await game.connect({ type: 'join', code });
-    a.send({ type: 'ready', ready: true, descriptor: redShirt });
-    b.send({ type: 'ready', ready: true, descriptor: blueShirt });
+    a.send({ type: 'ready', ready: true });
+    b.send({ type: 'ready', ready: true });
     await a.state((r) => r.players.length === 2 && r.players.every((p) => p.ready));
     a.send({ type: 'start' });
     await a.state((r) => r.phase === 'playing');
@@ -160,76 +157,35 @@ test(
   },
 );
 
-test(
-  'countdown locks damage and the final opponent can trade after two eliminations in the same millisecond',
-  { timeout: 5000 },
-  async (t) => {
-    const game = await arena(t);
-    const a = await game.connect({ type: 'create' });
-    const owner = await a.wait((m) => m.type === 'welcome');
-    const c = await game.connect({ type: 'join', code: owner.code });
-    const earlier = await c.wait((m) => m.type === 'welcome');
-    c.send({type:'ready', ready:true, descriptor:Array(12).fill(0.2)});
-    const b = await game.connect({ type: 'join', code: owner.code });
-    const peer = await b.wait((m) => m.type === 'welcome');
-    a.send({ type: 'ready', ready: true, descriptor: redShirt });
-    b.send({ type: 'ready', ready: true, descriptor: blueShirt });
-    await a.state((r) => r.players.length === 3 && r.players.every((p) => p.ready));
-    a.send({ type: 'start' });
-    const { round } = await a.state((r) => r.phase === 'playing');
-    const throwAt = (client, shotId) => client.send({ type: 'throw', round, shotId });
+test('late spectators, unavailable targets and invalid anchors cannot add coverage', { timeout: 5000 }, async t => {
+  const game = await arena(t);
+  const a = await game.connect({type:'create'});
+  const {code,playerId} = await a.wait(m => m.type === 'welcome');
+  const b = await game.connect({type:'join',code});
+  const peer = await b.wait(m => m.type === 'welcome');
+  a.send({type:'start'});
+  const {round} = await a.state(r => r.phase === 'playing');
+  game.advance(3000);
+  const c = await game.connect({type:'join',code});
+  const late = await c.wait(m => m.type === 'welcome');
+  await a.state(r => r.players.some(p => p.id === late.playerId && p.spectator));
+  const base = {type:'spray', round, targetId:peer.playerId, anchor:{triangle:2,u:.1,v:.2}};
+  c.send({...base,shotId:'spectator'});
+  c.send({type:'sync'});
+  await c.state(r => r.paintSeq === 0);
 
-    const hit = (client, shotId, targetId) =>
-      client.send({ type: 'impact', round, shotId, targetId, anchor: { triangle: 0, u: 0, v: 0.5 } });
+  for (const [i,changed] of [{targetId:playerId},{targetId:late.playerId},{anchor:{triangle:160,u:0,v:0}},
+    {anchor:{triangle:0,u:.8,v:.9}},{round:round+1}].entries()) {
+    game.advance(180);
+    a.send({...base,...changed,shotId:'rejected-'+i});
+    a.send({type:'sync'});
+    await a.state(r => r.serverNow === 103180 + i*180 && r.paintSeq === 0);
+  }
 
-    const flush = async (client) => {
-      client.send({ type: 'barrier' });
-      await client.wait((m) => m.type === 'error');
-    };
-
-    game.advance(2900);
-    throwAt(a, 'early');
-    await flush(a);
-    game.advance(200);
-    hit(a, 'early', peer.playerId);
-    await flush(a);
-
-    for (let n = 1; n <= 10; n++) {
-      game.advance(400);
-      const shotId = 's' + n;
-      throwAt(a, 'first-' + n);
-      await flush(a);
-      game.advance(410);
-      throwAt(a, shotId);
-      throwAt(b, shotId);
-      await Promise.all([flush(a), flush(b)]);
-      game.advance(200);
-      hit(a, 'first-' + n, earlier.playerId);
-      await c.state(r => r.players[1].health === 10-n);
-      hit(a, shotId, peer.playerId);
-      const s = await b.state((r) => r.players[2].health === 10 - n);
-      assert.equal(s.phase, 'playing');
-
-      if (n === 10) game.advance(801); // Final pose result arrives after the opponent's lethal hit.
-      hit(b, shotId, owner.playerId);
-      await a.state((r) => r.players[0].health === 10 - n);
-    }
-
-    const done = await b.state((r) => r.phase === 'finished');
-    assert.deepEqual(
-      done.leaderboard.map((p) => p.rank),
-      [1, 1, 3],
-    );
-    assert.ok(done.players.every((p) => p.health === 0));
-    assert.deepEqual(done.players.map(p=>p.eliminations),[2,0,1]);
-    b.send({ type: 'leave' });
-    const closed = once(b.ws, 'close');
-    await b.wait((m) => m.type === 'left');
-    assert.equal((await closed)[0], 1000);
-    const previous = await game.connect({ type: 'resume', code: owner.code, token: peer.token });
-    assert.equal((await previous.wait((m) => m.type === 'error')).code, 'INVALID_TOKEN');
-  },
-);
+  c.send({type:'leave'});
+  await c.wait(m => m.type === 'left');
+  assert.equal((await a.state(r => r.players.length === 2 && r.round === round && r.serverNow > 103000)).leaderboard.length,2);
+});
 
 test(
   'disconnected players can rejoin within grace then forfeit after grace',
@@ -240,8 +196,8 @@ test(
     const owner = await a.wait((m) => m.type === 'welcome');
     const b = await game.connect({ type: 'join', code: owner.code });
     const peer = await b.wait((m) => m.type === 'welcome');
-    a.send({ type: 'ready', ready: true, descriptor: redShirt });
-    b.send({ type: 'ready', ready: true, descriptor: blueShirt });
+    a.send({ type: 'ready', ready: true });
+    b.send({ type: 'ready', ready: true });
     await a.state((r) => r.players.length === 2 && r.players.every((p) => p.ready));
     a.send({ type: 'start' });
     await a.state((r) => r.phase === 'playing');
@@ -265,8 +221,8 @@ test('spectators release full-room slots on leave or after reconnect grace', { t
   const host = await game.connect({ type: 'create' });
   const { code } = await host.wait((m) => m.type === 'welcome');
   const teammate = await game.connect({ type: 'join', code });
-  host.send({ type: 'ready', ready: true, descriptor: redShirt });
-  teammate.send({ type: 'ready', ready: true, descriptor: blueShirt });
+  host.send({ type: 'ready', ready: true });
+  teammate.send({ type: 'ready', ready: true });
   await host.state((r) => r.players.length === 2 && r.players.every((p) => p.ready));
   host.send({ type: 'start' });
   await host.state((r) => r.phase === 'playing');
@@ -299,29 +255,21 @@ test('spectators release full-room slots on leave or after reconnect grace', { t
   assert.equal(scores.leaderboard.length, 2);
 });
 
-test('a resumed lobby camera must report ready before the host can start', { timeout: 5000 }, async (t) => {
+test('a resumed lobby player keeps a chosen color and camera-free start', { timeout: 5000 }, async t => {
   const game = await arena(t);
-  const host = await game.connect({ type: 'create' });
-  const { code } = await host.wait((m) => m.type === 'welcome');
-  const guest = await game.connect({ type: 'join', code });
-  const { token, playerId } = await guest.wait((m) => m.type === 'welcome');
-  host.send({ type: 'ready', ready: true, descriptor: redShirt });
-  guest.send({ type: 'ready', ready: true, descriptor: blueShirt });
-  await host.state((r) => r.players.length === 2 && r.players.every((p) => p.ready));
-
-  guest.ws.close();
-  await host.state((r) => r.players.some((p) => p.id === playerId && !p.connected));
-  game.advance(500);
-  const restored = await game.connect({ type: 'resume', code, token });
-  const fresh = await restored.state((r) => r.phase === 'lobby');
-  const returned = await host.state((r) => r.serverNow === fresh.serverNow);
-  assert.equal(returned.players.find((p) => p.id === playerId).ready, false);
-  assert.deepEqual(returned.players.find((p) => p.id === playerId).descriptor, blueShirt);
-  host.send({ type: 'start' });
-  assert.match((await host.wait((m) => m.type === 'error')).message, /ready camera/);
-
-  restored.send({ type: 'ready', ready: true });
-  await host.state((r) => r.serverNow === fresh.serverNow && r.players.every((p) => p.ready));
-  host.send({ type: 'start' });
-  assert.equal((await host.state((r) => r.phase === 'playing')).round, 1);
+  const a = await game.connect({type:'create'});
+  const {code} = await a.wait(m => m.type === 'welcome');
+  const invalid = await game.connect({type:'join',code,color:'chartreuse'});
+  await invalid.wait(m => m.type === 'error');
+  const b = await game.connect({type:'join',code,color:'#ff59a3'});
+  const {token,playerId} = await b.wait(m => m.type === 'welcome');
+  b.ws.close();
+  await a.state(r => r.players.some(p => p.id === playerId && !p.connected));
+  a.send({type:'start'});
+  await a.wait(m => m.type === 'error');
+  const back = await game.connect({type:'resume',code,token});
+  const room = await back.state(r => r.phase === 'lobby');
+  assert.equal(room.players[1].color,'#ff59a3');
+  a.send({type:'start'});
+  await back.state(r => r.phase === 'playing');
 });

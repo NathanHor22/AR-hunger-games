@@ -1,55 +1,7 @@
-import { drawTomatoProjectile } from "./menu-art.js";
 import { makeBody, hitBody, drawPaint } from "./public/body.js";
 import { ownership, clearlyInFront } from "./public/depth.js";
 import { drawNameplates } from "./public/nameplate.js";
-
-const flightMs = 280;
-
-export function flightProfile(startRadius, pixelsPerMeter) {
-  // Project a palm-sized fruit onto the same local scale as the tracked body.
-  const endRadius = Math.min(startRadius * .68, Math.max(4, pixelsPerMeter > 0
-    ? pixelsPerMeter * .04 : startRadius * .10));
-
-  const duration = Math.round(390 - 240 * endRadius / startRadius);
-
-  return { startRadius, endRadius, duration };
-}
-
-// undefined keeps the throw open. null closes it as a miss.
-export function resolveShot(shot, capturedAt, receivedAt, contact) {
-  const age = receivedAt - shot.at;
-
-  if (age > 1050) return null;
-
-  // Allow the whole evidence window for a delayed post-impact dodge. After
-  // that, one animation tick can dispatch a stored hit before server expiry.
-  if (age > 1000) return shot.beforeImpact?.hit ?? null;
-
-  if (capturedAt == null || capturedAt > receivedAt) return undefined;
-  const offset = capturedAt - shot.at - (shot.duration ?? flightMs);
-
-  if (offset < -100 || offset > 145) return undefined;
-  const hit = contact();
-
-  if (offset < 0) {
-    if (!shot.beforeImpact || offset > shot.beforeImpact.offset)
-      shot.beforeImpact = { offset, hit };
-
-    return undefined;
-  }
-
-  // Disagreement across impact can mean a dodge or a crossing. Only accept a
-  // bracketed contact when both observations name the same player.
-  if (
-    !hit ||
-    (shot.beforeImpact && shot.beforeImpact.hit?.targetId !== hit.targetId)
-  )
-    return null;
-
-  return shot.beforeImpact && -shot.beforeImpact.offset < offset
-    ? shot.beforeImpact.hit
-    : hit;
-}
+import { sprayIntervalMs } from "./public/ink.js";
 
 function cover(vw, vh, width, height) {
   const scale = Math.max(width / vw, height / vh);
@@ -74,16 +26,6 @@ export function project(points, vw, vh, width, height) {
   }));
 }
 
-export function endpoint(start, finger, width, height) {
-  const rise = Math.max(1, start.y - finger.y);
-  const travel = Math.min(height * 0.89, Math.max(height * 0.23, rise * 2.4));
-
-  return {
-    x: start.x + ((finger.x - start.x) * travel) / rise,
-    y: start.y - travel,
-  };
-}
-
 function surfaceAt(people, x, y, camera, mask) {
   if (!mask) return null;
   const col = Math.floor(((x - camera.x) * mask.width) / camera.width);
@@ -98,16 +40,34 @@ function surfaceAt(people, x, y, camera, mask) {
 export function contactAt(people, x, y, camera, mask = ownership(people)) {
   const person = surfaceAt(people, x, y, camera, mask);
 
+  if (!person) return null;
+
   if (
-    !person?.player?.connected ||
+    people.some(
+      (other) =>
+        !other.mask &&
+        !clearlyInFront(person.body, other.body) &&
+        hitBody(other.body, x, y),
+    )
+  )
+    return null;
+
+  if (!person.player)
+    return person.trackId != null ? { trackId: person.trackId } : null;
+
+  if (
+    !person.player.connected ||
     person.player.spectator ||
     person.player.health <= 0
   )
     return null;
 
-  if (people.some((other) => !other.mask && !clearlyInFront(person.body, other.body) && hitBody(other.body, x, y)))
-    return null;
-  const anchor = hitBody(person.body, x, y);
+  const anchor = hitBody(
+    person.body,
+    x,
+    y,
+    Math.min(24, (person.body?.radius ?? 0) * 0.32),
+  );
 
   return anchor ? { targetId: person.player.id, anchor } : null;
 }
@@ -118,7 +78,7 @@ function drawStains(ctx, people, mask, camera, silhouette) {
   silhouette.height = mask.height;
   const stencil = silhouette.getContext("2d");
   const alpha = stencil.createImageData(mask.width, mask.height);
-  const unmasked = people.filter(person => !person.mask && person.body);
+  const unmasked = people.filter((person) => !person.mask && person.body);
 
   for (const [index, person] of people.entries()) {
     if (!person.body || !person.player?.splats.length || !person.mask) continue;
@@ -127,10 +87,12 @@ function drawStains(ctx, people, mask, camera, silhouette) {
     for (const other of unmasked) {
       if (clearlyInFront(person.body, other.body)) continue;
 
-      for (const {vertices: [a,b,c]} of other.body.visible) {
-        uncertain.moveTo(a.x,a.y);
-        uncertain.lineTo(b.x,b.y);
-        uncertain.lineTo(c.x,c.y);
+      for (const {
+        vertices: [a, b, c],
+      } of other.body.visible) {
+        uncertain.moveTo(a.x, a.y);
+        uncertain.lineTo(b.x, b.y);
+        uncertain.lineTo(c.x, c.y);
         uncertain.closePath();
       }
     }
@@ -171,144 +133,177 @@ function splatSound(audio, frequency, gain) {
   oscillator.stop(audio.currentTime + 0.11);
 }
 
-// Match peripheral patches instead of following the targeted player's motion.
-export function cameraShift(initial, current, camera) {
-  if (!initial || !current) return null;
+// Render fresh paint on the anchored body immediately after the server acknowledges it.
+// The brief local spray animation also makes contact visible during a network round trip.
+function drawSpray(ctx, burst, point, age, width, height, reducedMotion) {
+  const fade = Math.max(0, 1 - age / 290);
+  ctx.save();
+  ctx.fillStyle = burst.color;
+  ctx.strokeStyle = burst.color;
 
-  let lowest = Infinity,
-    runnerUp = Infinity,
-    dx = 0,
-    dy = 0;
+  if (!reducedMotion && age < 110) {
+    const progress = age / 110;
 
-  for (let sy = -4; sy <= 4; sy++) {
-    for (let sx = -4; sx <= 4; sx++) {
-      let diff = 0;
+    const fromX = width * 0.6,
+      fromY = height + 12;
 
-      for (let y = 5; y < 27; y += 2) {
-        for (const x of [5, 8, 11, 28, 31, 34]) {
-          const a = 4 * (y * 40 + x);
-          const b = 4 * ((y + sy) * 40 + x + sx);
-          diff += Math.abs(initial[a + 1] - current[b + 1]);
-        }
-      }
+    for (let i = 0; i < 5; i++) {
+      const t = progress * 0.65 + i * 0.105;
 
-      if (diff < lowest) {
-        runnerUp = lowest;
-        lowest = diff;
-        dx = sx;
-        dy = sy;
-      } else runnerUp = Math.min(runnerUp, diff);
+      if (t > 1) continue;
+      const x = fromX + (point.x - fromX) * t;
+      const y = fromY + (point.y - fromY) * t;
+      ctx.globalAlpha = 0.54 * t;
+      ctx.beginPath();
+      ctx.ellipse(
+        x,
+        y,
+        2 + (1 - t) * 4,
+        3 + (1 - t) * 7,
+        Math.atan2(fromY - point.y, fromX - point.x) - Math.PI / 2,
+        0,
+        Math.PI * 2,
+      );
+      ctx.fill();
     }
   }
 
-  if (
-    Math.abs(dx) === 4 ||
-    Math.abs(dy) === 4 ||
-    lowest > 1450 ||
-    runnerUp < lowest * 1.12 + 25
-  )
-    return null;
+  ctx.globalAlpha = fade * (burst.hit ? 0.92 : 0.52);
+  const radius = burst.hit ? burst.radius : 6;
+  const spread = reducedMotion ? 1 : 0.65 + Math.min(1, age / 100) * 0.5;
 
-  return { x: (dx * camera.width) / 40, y: (dy * camera.height) / 32 };
+  if (burst.hit) {
+    ctx.beginPath();
+
+    for (let i = 0; i < 20; i++) {
+      const angle = (i * Math.PI) / 10 + burst.phase;
+
+      const r =
+        radius *
+        spread *
+        (0.72 +
+          0.25 * Math.sin(5 * angle + burst.phase) +
+          0.14 * Math.cos(7 * angle));
+
+      const x = point.x + Math.cos(angle) * r;
+      const y = point.y + Math.sin(angle) * r * 0.8;
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  for (let i = 0; i < 5; i++) {
+    const angle = burst.phase + 2.4 * i;
+    const r = radius * (spread + (reducedMotion ? 0.1 : age / 250));
+    ctx.beginPath();
+    ctx.arc(
+      point.x + Math.cos(angle) * r,
+      point.y + Math.sin(angle) * r,
+      Math.max(1.3, radius * (i % 2 ? 0.11 : 0.16)),
+      0,
+      2 * Math.PI,
+    );
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function anchoredPoint(scene, burst) {
+  if (!burst.hit) return burst;
+  const person = scene.find((p) => p.player?.id === burst.hit.targetId);
+  const { triangle, u, v } = burst.hit.anchor;
+  const face = person?.body?.faces[triangle];
+
+  if (!face || face.area >= -0.1) return null;
+  const [a, b, c] = face.vertices;
+
+  return {
+    x: a.x + (b.x - a.x) * u + (c.x - a.x) * v,
+    y: a.y + (b.y - a.y) * u + (c.y - a.y) * v,
+  };
 }
 
 export function createArena({
   video,
   canvas,
-  launch,
   send,
   message,
-  canThrow,
+  canSpray,
+  canIdentify = canSpray,
+  onIdentify,
 }) {
   const ctx = canvas.getContext("2d");
-  const held = launch.querySelector("canvas");
-  drawTomatoProjectile(held.getContext("2d"), held.width / 2, held.height / 2, held.width / 2);
-  const controls = [document.querySelector(".round-hud"), document.getElementById("leave")];
-  let reserved = [];
+  const overlay = document.createElement("canvas");
+  const paint = overlay.getContext("2d");
+  const silhouette = document.createElement("canvas");
+
+  const controls = [
+    document.querySelector(".round-hud"),
+    document.getElementById("leave"),
+  ];
+
+  const motion = matchMedia("(prefers-reduced-motion: reduce)");
+  const bursts = [];
 
   let room,
     myId,
     people = [],
     scene = [],
-    frameAt = -Infinity,
-    animation = 0;
+    nameTags = [],
+    camera,
+    mask,
+    reserved = [];
 
-  let shot,
-    grip,
-    nextThrow = 0,
-    audio,
-    lastHits,
-    lastHealth,
-    flashUntil = 0;
+  let frameAt = -Infinity,
+    deliveredAt = -Infinity,
+    lastPose = -Infinity;
 
   let sceneWidth = 0,
     sceneHeight = 0,
-    lastPoseTime = -1,
-    mask,
-    camera,
-    frameProbe;
+    paintDirty = true,
+    animation = 0;
 
-  const pendingShots = new Set();
-  let paintDirty = true;
+  let pressing = null,
+    keyboardAim,
+    nextAt = 0,
+    audio;
 
-  const overlay = document.createElement("canvas");
-  const paint = overlay.getContext("2d");
-  const silhouette = document.createElement("canvas");
-  const sample = document.createElement("canvas");
-  sample.width = 40;
-  sample.height = 32;
-  const probe = sample.getContext("2d", { willReadFrequently: true });
+  let inkedUntil = 0,
+    inkedColor = "#76ec75";
 
-  function pixels() {
-    if (!video.videoWidth || video.readyState < 2) return null;
-    probe.drawImage(video, 0, 0, 40, 32);
-
-    return probe.getImageData(0, 0, 40, 32).data;
+  function clearInput() {
+    pressing = null;
   }
 
   function setState(next, id) {
-    const me = next.players.find((p) => p.id === id);
-
-    if (!room || next.round !== room.round || next.code !== room.code) {
-      shot = null;
-      grip = null;
-      delete launch.dataset.empty;
-      pendingShots.clear();
-      nextThrow = 0;
-      lastHits = me?.hits;
-      lastHealth = me?.health;
+    if (!room || next.code !== room.code || next.round !== room.round) {
+      bursts.length = 0;
+      clearInput();
+      keyboardAim = null;
+      nextAt = inkedUntil = 0;
     }
 
-    if (me?.hits > lastHits) {
-      splatSound(audio, 360, 0.07);
-      message("Hit!");
-    }
-
-    if (me?.health < lastHealth) {
-      flashUntil = performance.now() + 260;
-      message("You took a hit");
-    }
-
-    lastHits = me?.hits;
-    lastHealth = me?.health;
     room = next;
     myId = id;
-    lastPoseTime = -1;
+
+    for (const person of scene) {
+      person.player = room.players.find(
+        (p) => p.id === person.id && p.id !== myId,
+      );
+    }
+
+    paintDirty = true;
+
+    if (next.phase !== "playing") clearInput();
   }
 
   function prepareScene(width, height) {
-    if (!width || !height || !video.videoWidth) {
-      scene = [];
-      mask = null;
-
-      return;
-    }
-
-    if (
-      lastPoseTime === frameAt &&
-      sceneWidth === width &&
-      sceneHeight === height
-    )
+    if (lastPose === frameAt && width === sceneWidth && height === sceneHeight)
       return;
     scene = [];
     camera = cover(video.videoWidth, video.videoHeight, width, height);
@@ -327,67 +322,101 @@ export function createArena({
         body,
         points,
         mask: person.mask,
+        trackId: person.trackId,
+        id: person.id,
         player: room?.players.find((p) => p.id === person.id && p.id !== myId),
       });
     }
 
-    lastPoseTime = frameAt;
+    lastPose = frameAt;
     sceneWidth = width;
     sceneHeight = height;
-    reserved = controls.map(control => control.getBoundingClientRect());
+    reserved = controls.map((control) => control.getBoundingClientRect());
     mask = ownership(scene);
     paintDirty = true;
   }
 
-  function settleShots(capturedAt, receivedAt) {
-    for (const pending of pendingShots) {
-      const hit = resolveShot(pending, capturedAt, receivedAt, () => {
-        const width = canvas.clientWidth,
-          height = canvas.clientHeight;
-
-        if (
-          pending.width !== width ||
-          pending.height !== height ||
-          pending.videoWidth !== video.videoWidth ||
-          pending.videoHeight !== video.videoHeight ||
-          !people.length
-        )
-          return null;
-        prepareScene(width, height);
-        const shift = cameraShift(pending.pixels, frameProbe, camera);
-
-        return (
-          shift &&
-          contactAt(
-            scene,
-            pending.to.x + shift.x,
-            pending.to.y + shift.y,
-            camera,
-            mask,
-          )
-        );
-      });
-
-      if (hit === undefined) continue;
-      pendingShots.delete(pending);
-
-      if (hit)
-        send({
-          type: "impact",
-          round: pending.round,
-          shotId: pending.id,
-          ...hit,
-        });
-    }
+  function fresh(now) {
+    return (
+      video.videoWidth > 0 &&
+      video.videoHeight > 0 &&
+      now - frameAt <= 700 &&
+      now - deliveredAt <= 450
+    );
   }
 
-  function draw(time) {
-    settleShots(null, performance.now());
+  function spray(point, now, initial = false) {
+    const armed = canSpray();
+
+    if ((!armed && !(initial && canIdentify())) || now < nextAt) return;
+    nextAt = now + sprayIntervalMs;
 
     const width = canvas.clientWidth,
       height = canvas.clientHeight;
 
+    let hit = null;
+
+    if (width && height && fresh(now)) {
+      prepareScene(width, height);
+
+      const tag = initial && nameTags.find(({ left, right, top, bottom, trackId }) =>
+        point.x >= left && point.x <= right && point.y >= top && point.y <= bottom &&
+        scene.some((person) => person.trackId === trackId && !person.player));
+
+      hit = tag ? { trackId: tag.trackId } : contactAt(scene, point.x, point.y, camera, mask);
+    }
+
+    if (hit?.trackId != null) {
+      clearInput();
+
+      if (initial) onIdentify(hit.trackId);
+      else message("Tap this player to identify them.");
+
+      return;
+    }
+
+    if (!armed) return;
+
+    if (!hit && initial && (!fresh(now) || !scene.length))
+      message("Frame the player’s upper body, then tap them.");
+    let color = room.players.find((p) => p.id === myId)?.color || "#fff2d2";
+    let radius = 8;
+
+    if (hit) {
+      const target = scene.find((p) => p.player?.id === hit.targetId);
+      const { triangle, u, v } = hit.anchor;
+
+      if (
+        !send({
+          type: "spray",
+          round: room.round,
+          shotId: crypto.randomUUID(),
+          targetId: hit.targetId,
+          anchor: { triangle, u, v },
+        })
+      )
+        return;
+      color = target.player.color;
+      radius = Math.max(12, Math.min(34, target.body.radius * 0.34));
+    }
+
+    bursts.push({
+      ...point,
+      at: now,
+      color,
+      radius,
+      phase: Math.random() * Math.PI * 2,
+      hit,
+    });
+    splatSound(audio, hit ? 335 : 205, hit ? 0.037 : 0.017);
+  }
+
+  function draw(time) {
+    const width = canvas.clientWidth,
+      height = canvas.clientHeight;
+
     if (!width || !height) {
+      clearInput();
       animation = requestAnimationFrame(draw);
 
       return;
@@ -406,153 +435,199 @@ export function createArena({
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const visible = time - frameAt <= 380 && video.videoWidth;
+    if (pressing && !canSpray()) clearInput();
 
-    if (visible) prepareScene(width, height);
+    if (pressing) spray(pressing, time);
+    const visible = fresh(time);
 
-    if (visible && paintDirty) {
-      paintDirty = false;
+    if (visible) {
+      prepareScene(width, height);
 
-      if (overlay.width !== width || overlay.height !== height) {
-        overlay.width = width;
-        overlay.height = height;
+      if (paintDirty) {
+        paintDirty = false;
+
+        if (overlay.width !== width || overlay.height !== height) {
+          overlay.width = width;
+          overlay.height = height;
+        }
+
+        paint.clearRect(0, 0, width, height);
+
+        if (scene.some((p) => p.player?.splats.length))
+          drawStains(paint, scene, mask, camera, silhouette);
       }
 
-      paint.clearRect(0, 0, width, height);
-
-      if (scene.some((p) => p.player?.splats.length))
-        drawStains(paint, scene, mask, camera, silhouette);
+      if (scene.length) ctx.drawImage(overlay, 0, 0);
     }
 
-    if (visible && scene.length) ctx.drawImage(overlay, 0, 0);
+    while (bursts.length && time - bursts[0].at >= 290) bursts.shift();
 
-    if (visible) drawNameplates(ctx, scene, width, height, reserved);
+    for (const burst of bursts) {
+      const point = anchoredPoint(visible ? scene : [], burst);
 
-    if (grip && !canThrow()) grip = null;
+      if (point)
+        drawSpray(
+          ctx,
+          burst,
+          point,
+          Math.max(0, time - burst.at),
+          width,
+          height,
+          motion.matches,
+        );
+    }
 
-    if (shot && time - shot.at >= shot.duration) shot = null;
+    if (time < inkedUntil) {
+      // Steady wet paint on the screen edge communicates hits on one's own back-facing camera.
+      ctx.save();
+      ctx.globalAlpha = 0.74 * Math.min(1, (inkedUntil - time) / 350);
+      ctx.fillStyle = inkedColor;
+      ctx.fillRect(0, 0, 6, height);
 
-    if (grip) {
-      drawTomatoProjectile(ctx, grip.center.x, grip.center.y, grip.radius);
-    } else if (shot) {
-      const t = Math.max(0, (time - shot.at) / shot.duration);
-
-      if (camera && frameAt > shot.at && shot.poseAt !== frameAt) {
-        shot.poseAt = frameAt;
-        shot.shift = cameraShift(shot.pixels, frameProbe, camera);
+      for (const [y, size] of [
+        [0.38, 20],
+        [0.42, 11],
+        [0.63, 14],
+      ]) {
+        ctx.beginPath();
+        ctx.ellipse(0, height * y, size, size * 1.55, -0.18, 0, Math.PI * 2);
+        ctx.fill();
       }
 
-      // Interpolate inverse depth so the fruit recedes quickly on leaving the hand.
-      const radius = 1 / ((1 - t) / shot.startRadius + t / shot.endRadius);
-      const x = shot.from.x + t * (shot.to.x - shot.from.x + (shot.shift?.x ?? 0));
-
-      const y = shot.from.y + t * (shot.to.y - shot.from.y + (shot.shift?.y ?? 0))
-        - Math.sin(t * Math.PI) * height * .045;
-
-      drawTomatoProjectile(ctx, x, y, radius);
-    } else if (launch.dataset.empty && time >= nextThrow) {
-      delete launch.dataset.empty;
+      ctx.restore();
     }
 
-    if (time < flashUntil) {
-      ctx.fillStyle = "#ff412429";
-      ctx.fillRect(0, 0, width, height);
+    nameTags = visible ? drawNameplates(ctx, scene, width, height, reserved) : [];
+
+    if (keyboardAim) {
+      ctx.save();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.shadowColor = "#211731";
+      ctx.shadowBlur = 3;
+      ctx.beginPath();
+      ctx.arc(keyboardAim.x, keyboardAim.y, 9, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     }
 
     animation = requestAnimationFrame(draw);
   }
 
-  function fire(from, to, radius) {
-    const now = performance.now();
+  function local(e) {
+    const rect = canvas.getBoundingClientRect();
 
-    if (!canThrow() || now < nextThrow) return;
-    const id = crypto.randomUUID();
-
-    if (!send({ type: "throw", round: room.round, shotId: id })) return;
-    const width = canvas.clientWidth, height = canvas.clientHeight;
-    let scale;
-
-    if (now - frameAt <= 380) {
-      prepareScene(width, height);
-      scale = surfaceAt(scene, to.x, to.y, camera, mask)?.body?.pixelsPerMeter;
-    }
-
-    nextThrow = now + 410;
-    launch.dataset.empty = "true";
-    shot = {
-      id, round: room.round, from, to, at: now, width, height,
-      ...flightProfile(radius, scale),
-      pixels: pixels(),
-      videoWidth: video.videoWidth,
-      videoHeight: video.videoHeight,
-    };
-    pendingShots.add(shot);
-    splatSound(audio, 190, 0.04);
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
-  function handPosition() {
-    const fruit = held.getBoundingClientRect();
-    const view = canvas.getBoundingClientRect();
-
-    return { x: fruit.left - view.left + fruit.width / 2, y: fruit.top - view.top + fruit.height / 2,
-      radius: fruit.width / 2 };
-  }
-
-  function moveFruit(e) {
-    grip.center.x = grip.home.x + e.clientX - grip.touchX;
-    grip.center.y = grip.home.y + e.clientY - grip.touchY;
-  }
-
-  // The fruit owns touch gestures. Keep the browser from interpreting a fast
-  // throw as a fling and consuming the first tap on the following screen.
-  launch.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
-  launch.addEventListener("pointerdown", (e) => {
-    if (!e.isPrimary || e.button !== 0 || grip || !canThrow() || performance.now() < nextThrow) return;
-
+  function enableAudio() {
     if (globalThis.AudioContext) {
       audio ??= new AudioContext();
-      audio.resume().catch(() => {});
+
+      if (audio.state === "suspended") void audio.resume().catch(() => {});
     }
-
-    const home = handPosition();
-    grip = { id: e.pointerId, home, center: { x: home.x, y: home.y }, radius: home.radius,
-      touchX: e.clientX, touchY: e.clientY };
-    launch.setPointerCapture(e.pointerId);
-    launch.dataset.empty = "true";
-  });
-  launch.addEventListener("pointermove", (e) => {
-    if (grip?.id === e.pointerId) moveFruit(e);
-  });
-  launch.addEventListener("pointerup", (e) => {
-    if (grip?.id !== e.pointerId) return;
-    moveFruit(e);
-    const { home, center, radius } = grip;
-    grip = null;
-
-    if (home.y - center.y > 12) {
-      fire(center, endpoint(home, center, canvas.clientWidth, canvas.clientHeight), radius);
-    }
-  });
-
-  function cancelGrip(e) {
-    if (grip?.id === e.pointerId) grip = null;
   }
 
-  launch.addEventListener("pointercancel", cancelGrip);
-  launch.addEventListener("lostpointercapture", cancelGrip);
-  launch.addEventListener("click", (e) => {
-    if (e.detail !== 0 || !canThrow()) return;
-    const home = handPosition();
-    fire(home, { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 }, home.radius);
+  canvas.addEventListener("touchstart", (e) => e.preventDefault(), {
+    passive: false,
+  });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary || e.button !== 0 || pressing || !(canSpray() || canIdentify())) return;
+    keyboardAim = null;
+    enableAudio();
+    canvas.setPointerCapture(e.pointerId);
+    pressing = { id: e.pointerId, ...local(e) };
+    spray(pressing, performance.now(), true);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (pressing?.id === e.pointerId) Object.assign(pressing, local(e));
+  });
+
+  function release(e) {
+    if (pressing?.id === e.pointerId) clearInput();
+  }
+
+  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointercancel", release);
+  canvas.addEventListener("lostpointercapture", release);
+  canvas.addEventListener("keydown", (e) => {
+    const arrows = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+
+    if (![...arrows, " ", "Enter"].includes(e.key) || !(canSpray() || canIdentify())) return;
+    e.preventDefault();
+    keyboardAim ??= { x: canvas.clientWidth / 2, y: canvas.clientHeight / 2 };
+
+    if (arrows.includes(e.key)) {
+      const step = e.shiftKey ? 5 : 24;
+      keyboardAim.x = Math.max(
+        0,
+        Math.min(
+          canvas.clientWidth - 1,
+          keyboardAim.x +
+            step * ((e.key === "ArrowRight") - (e.key === "ArrowLeft")),
+        ),
+      );
+      keyboardAim.y = Math.max(
+        0,
+        Math.min(
+          canvas.clientHeight - 1,
+          keyboardAim.y +
+            step * ((e.key === "ArrowDown") - (e.key === "ArrowUp")),
+        ),
+      );
+
+      if (pressing?.id === "keyboard") Object.assign(pressing, keyboardAim);
+    } else if (!e.repeat && !pressing) {
+      enableAudio();
+      pressing = { id: "keyboard", ...keyboardAim };
+      spray(pressing, performance.now(), true);
+    }
+  });
+  canvas.addEventListener("keyup", (e) => {
+    if (pressing?.id === "keyboard" && (e.key === " " || e.key === "Enter"))
+      clearInput();
+  });
+  canvas.addEventListener("click", (e) => {
+    if (e.detail === 0 && (canSpray() || canIdentify()))
+      spray(
+        keyboardAim || {
+          x: canvas.clientWidth / 2,
+          y: canvas.clientHeight / 2,
+        },
+        performance.now(),
+        true,
+      );
+  });
+  canvas.addEventListener("blur", () => {
+    keyboardAim = null;
+    clearInput();
+  });
+  window.addEventListener("blur", clearInput);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) clearInput();
   });
 
   return {
     setState,
-    setPeople(value, capturedAt = performance.now(), capturedProbe) {
+    receivePaint(event) {
+      if (room?.phase !== "playing" || room.code !== event.code ||
+          room.round !== event.round || event.targetId !== myId) return;
+      const me = room.players.find((p) => p.id === myId);
+
+      if (!me) return;
+      const now = performance.now();
+
+      if (now >= inkedUntil) message("You’ve been inked!");
+      inkedUntil = now + 1150;
+      inkedColor = me.color;
+    },
+    setPeople(value, capturedAt = performance.now()) {
       people = value;
       frameAt = capturedAt;
-      frameProbe = capturedProbe ?? null;
-      settleShots(capturedAt, performance.now());
+      // Naming a player can republish the same capture with a new identity.
+      lastPose = -Infinity;
+      deliveredAt = performance.now();
     },
     start() {
       if (!animation) animation = requestAnimationFrame(draw);
@@ -560,13 +635,15 @@ export function createArena({
     stop() {
       cancelAnimationFrame(animation);
       animation = 0;
+      clearInput();
+      keyboardAim = null;
       scene = [];
+      nameTags = [];
       people = [];
-      shot = null;
-      pendingShots.clear();
-      grip = null;
-      delete launch.dataset.empty;
-      lastPoseTime = -1;
+      mask = null;
+      bursts.length = 0;
+      frameAt = deliveredAt = lastPose = -Infinity;
+      inkedUntil = 0;
     },
   };
 }

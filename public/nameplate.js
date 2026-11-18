@@ -85,24 +85,26 @@ function position(anchor, plateWidth, width, height, occupied) {
 }
 
 export function drawNameplates(ctx, scene, width, height, reserved = []) {
-  if (width < 80 || height < plateHeight + 2 * edge) return;
+  if (width < 80 || height < plateHeight + 2 * edge) return [];
   const occupied = [...reserved];
+  const unnamed = [];
   ctx.save();
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.font = 'bold 14px Consolas, monospace';
 
-  for (const { points, player } of scene) {
-    if (!player?.connected || player.spectator) continue;
+  for (const { points, player, trackId } of scene) {
+    if (player ? !player.connected || player.spectator : trackId == null) continue;
     const crown = headAnchor(points, width, height);
 
     if (!crown) continue;
-    const plateWidth = Math.min(width - 2 * edge, clamp(ctx.measureText(player.name).width + 59, 96, 184));
+    const name = player?.name ?? 'Tap to name';
+    const plateWidth = Math.min(width - 2 * edge, clamp(ctx.measureText(name).width + (player ? 63 : 16), 96, 190));
     occupied.push(crown.head);
     const box = position(crown, plateWidth, width, height, occupied);
     occupied.push(box);
     const { left, top, right, bottom } = box;
-    const health = clamp(player.health, 0, 10);
+    const covered = clamp(player?.coverage ?? 0, 0, 100);
 
     ctx.beginPath();
     ctx.moveTo(clamp(crown.x, left + 2, right - 2), clamp(crown.y, top, bottom));
@@ -116,23 +118,33 @@ export function drawNameplates(ctx, scene, width, height, reserved = []) {
 
     ctx.fillStyle = '#251b35';
     ctx.fillRect(left, top, plateWidth, plateHeight);
-    ctx.fillStyle = player.color;
+    ctx.fillStyle = player?.color ?? '#ffda49';
     ctx.fillRect(left, top, 3, plateHeight);
     ctx.fillStyle = '#fff2d2';
-    ctx.fillText(player.name, left + 8, top + 16, plateWidth - 54);
+    ctx.fillText(name, left + 8, top + (player ? 16 : 21), plateWidth - (player ? 61 : 12));
+
+    if (!player) {
+      unnamed.push({ ...box, trackId });
+      continue;
+    }
+
     ctx.font = 'bold 11px Consolas, monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(health + '/10', right - 5, top + 16);
+    ctx.fillText(covered + '%', right - 5, top + 16);
     ctx.textAlign = 'left';
     ctx.font = 'bold 14px Consolas, monospace';
 
-    const cell = (plateWidth - 13) / 10;
+    const barWidth = plateWidth - 13;
+    ctx.fillStyle = '#675775';
+    ctx.fillRect(left + 8, bottom - 9, barWidth, 5);
 
-    for (let i = 0; i < 10; i++) {
-      ctx.fillStyle = i < health ? player.color : '#675775';
-      ctx.fillRect(left + 8 + i * cell, bottom - 9, cell - 1.5, 5);
+    if (covered > 0) {
+      ctx.fillStyle = player.color;
+      ctx.fillRect(left + 8, bottom - 9, Math.max(2, barWidth * covered / 100), 5);
     }
   }
 
   ctx.restore();
+
+  return unnamed;
 }

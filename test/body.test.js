@@ -66,18 +66,37 @@ test("turning away hides the original chest triangle", () => {
 test("head, forearm and shin paint retain their own surface coordinates as a person moves", () => {
   const marks = pose();
 
-  for (const [id, x, y] of [[2,.52,.09], [5,.48,.09], [7,.55,.1], [8,.45,.1],
-    [9,.52,.13], [10,.48,.13], [15,.78,.46], [25,.61,.74], [27,.63,.95]]) {
-    marks[id] = { x, y, z:0, visibility:1 };
+  for (const [id, x, y] of [
+    [2, 0.52, 0.09],
+    [5, 0.48, 0.09],
+    [7, 0.55, 0.1],
+    [8, 0.45, 0.1],
+    [9, 0.52, 0.13],
+    [10, 0.48, 0.13],
+    [15, 0.78, 0.46],
+    [25, 0.61, 0.74],
+    [27, 0.63, 0.95],
+  ]) {
+    marks[id] = { x, y, z: 0, visibility: 1 };
   }
 
   const body = makeBody(marks, null, 800, 600);
-  const moved = makeBody(marks.map(p => p && { ...p, x:p.x+.05 }), null, 800, 600);
 
-  for (const [part, x, y] of [[9,400,62], [3,593,258], [7,496,507]]) {
+  const moved = makeBody(
+    marks.map((p) => p && { ...p, x: p.x + 0.05 }),
+    null,
+    800,
+    600,
+  );
+
+  for (const [part, x, y] of [
+    [9, 400, 62],
+    [3, 593, 258],
+    [7, 496, 507],
+  ]) {
     const first = hitBody(body, x, y);
     assert.equal(Math.floor(first?.triangle / 16), part);
-    const next = hitBody(moved, x+40, y);
+    const next = hitBody(moved, x + 40, y);
     assert.equal(next?.triangle, first.triangle);
     assert.ok(Math.abs(next.u - first.u) + Math.abs(next.v - first.v) < 1e-8);
   }
@@ -93,4 +112,39 @@ test("a missing elbow drops only that arm; a missing torso drops the body", () =
   assert.equal(hitBody(body, 527, 195), null);
   landmarks[23].visibility = 0.1;
   assert.equal(makeBody(landmarks, null, 800, 600), null);
+});
+
+test("cropped hips below the camera still let a close-up upper body receive paint", () => {
+  const marks = pose();
+
+  for (const i of [23, 24]) {
+    marks[i] = { ...marks[i], visibility: 0.1, y: 1.26 };
+  }
+
+  assert.ok(hitBody(makeBody(marks, null, 800, 600), 399, 346));
+});
+
+test("a silhouette-edge spray can attach to the adjacent articulated mesh", () => {
+  const body = {
+    visible: [
+      {
+        id: 6,
+        area: -100,
+        vertices: [
+          { x: 0, y: 0, z: 0 },
+          { x: 0, y: 10, z: 0 },
+          { x: 10, y: 0, z: 0 },
+        ],
+      },
+    ],
+  };
+
+  assert.equal(hitBody(body, -2, 4), null);
+  assert.deepEqual(hitBody(body, -2, 4, 3), {
+    triangle: 6,
+    u: 0.4,
+    v: 0,
+    depth: 0,
+  });
+  assert.equal(hitBody(body, -12, 4, 3), null);
 });

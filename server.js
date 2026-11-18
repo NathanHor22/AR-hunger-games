@@ -1,4 +1,5 @@
 import { bodyTriangleCount } from './public/body.js';
+import { addInk, createInkSurface, inkColors, inkStandings, sprayIntervalMs, totalInkCells } from './public/ink.js';
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { createServer as httpServer } from 'node:http';
 import { createServer as httpsServer } from 'node:https';
@@ -9,10 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { WebSocket, WebSocketServer } from 'ws';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const colors = ['#ff7059', '#52b9ff', '#e8bb30', '#59d093', '#b98bff', '#ff80bb', '#54d7cb', '#f39747'];
+const palette = inkColors.map(ink => ink.hex);
 const roundMs = 90_000;
 const graceMs = 25_000;
-const impactWindowMs = 1150;
 
 const mime = {
   '.html': 'text/html; charset=utf-8',
@@ -97,29 +97,6 @@ function error(ws, message, code = 'INVALID_ACTION') {
   send(ws, { type: 'error', message, code });
 }
 
-function leaderboard(players) {
-  const sorted = players
-    .filter((p) => !p.spectator)
-    .sort(
-      (a, b) =>
-        Number(b.sharedWin) - Number(a.sharedWin) ||
-        b.health - a.health ||
-        (b.outAt || 0) - (a.outAt || 0) ||
-        b.hits - a.hits,
-    );
-
-  let last, rank;
-
-  return sorted.map((p, i) => {
-    const key = p.sharedWin ? 'shared-win' : [p.health, p.outAt, p.hits].join('/');
-
-    if (key !== last) rank = i + 1;
-    last = key;
-
-    return { id: p.id, rank, name: p.name, health: p.health, hits: p.hits, eliminations: p.eliminations };
-  });
-}
-
 function snapshot(room, now) {
   const players = [...room.players.values()];
 
@@ -131,7 +108,8 @@ function snapshot(room, now) {
     startsAt: room.startsAt,
     endsAt: room.endsAt,
     serverNow: now,
-    leaderboard: leaderboard(players),
+    paintSeq: room.paintSeq,
+    leaderboard: inkStandings(players),
     players: players.map((p) => ({
       id: p.id,
       name: p.name,
@@ -140,9 +118,9 @@ function snapshot(room, now) {
       ready: p.ready,
       health: p.health,
       hits: p.hits,
-      eliminations: p.eliminations,
+      score: p.score,
+      coverage: p.coverage,
       spectator: p.spectator,
-      descriptor: p.descriptor,
       splats: p.splats,
     })),
   };
@@ -154,60 +132,59 @@ function broadcast(room, now) {
   for (const p of room.players.values()) send(p.ws, state);
 }
 
-function finishIfNeeded(room, now, contender) {
+function finishIfNeeded(room, now) {
   if (room.phase !== 'playing') return;
-  const alive = [...room.players.values()].filter((p) => !p.spectator && p.health > 0);
+  const remaining = [...room.players.values()].filter(p => !p.spectator && p.health > 0);
 
-  if (now >= room.endsAt || !alive.length) {
-    room.phase = 'finished';
-
-    return;
-  }
-
-  if (alive.length !== 1) return;
-
-  if (room.closingAt === null && contender) {
-    // An already flying tomato can complete a mutual knockout in the same exchange.
-    let pendingUntil = now;
-
-    for (const launch of contender.shots.values()) {
-      if (launch !== null) pendingUntil = Math.max(pendingUntil, launch + impactWindowMs + 1);
-    }
-
-    if (pendingUntil > now) {
-      room.closingAt = Math.min(pendingUntil, room.endsAt);
-      room.finalPair = [contender.id, alive[0].id];
-    }
-  }
-
-  if (room.closingAt === null || now >= room.closingAt) room.phase = 'finished';
+  if (now >= room.endsAt || remaining.length < 2) room.phase = 'finished';
 }
 
 function resetPlayer(p) {
   Object.assign(p, {
-    sharedWin: false,
-    spectator: false,
-    health: 10,
-    hits: 0,
-    eliminations: 0,
-    outAt: 0,
-    splats: [],
-    lastThrow: -Infinity,
-    shots: new Map(),
+    spectator: false, health: 10, hits: 0, score: 0, coverage: 0, inked: 0,
+    cells: createInkSurface(), splats: [], shots: new Set(), nextSpray: -Infinity,
   });
+}
+
+function spray(room, player, m, at) {
+  if (room.phase !== 'playing' || room.round !== m.round || player.spectator || !player.health || at < room.startsAt) return;
+
+  if (!/^[a-zA-Z0-9_:-]{1,80}$/.test(jsonText(m.shotId))) return error(player.ws, 'Invalid spray ID');
+
+  // Allow a pair of pulses to arrive together after a network stall, while
+  // preserving the six-per-second cadence over a sustained burst.
+  if (at < player.nextSpray - sprayIntervalMs || player.shots.has(m.shotId)) return;
+  player.nextSpray = Math.max(player.nextSpray, at) + sprayIntervalMs;
+  player.shots.add(m.shotId);
+  const target = room.players.get(m.targetId);
+
+  if (!target?.ws || target === player || target.spectator || !target.health) return;
+  const { triangle, u, v } = m.anchor || {};
+
+  if (!Number.isInteger(triangle) || triangle < 0 || triangle >= bodyTriangleCount
+    || !Number.isFinite(u) || !Number.isFinite(v) || u < 0 || v < 0 || u+v > 1.00001) return;
+  const fresh = addInk(target.cells, { triangle, u, v });
+  let splat;
+  player.hits++;
+
+  if (fresh) {
+    target.inked += fresh;
+    target.coverage = Math.round(target.inked * 1000 / totalInkCells) / 10;
+    player.score += fresh;
+    splat = { id: player.id + '-' + m.shotId, shooterId: player.id, color: target.color,
+      triangle, u, v, scale: 1, seed: randomInt(0x7fffffff) };
+    target.splats.push(splat);
+  }
+
+  const event = { type: 'paint', code: room.code, round: room.round, seq: ++room.paintSeq, serverNow: at,
+    shooterId: player.id, targetId: target.id, score: player.score, hits: player.hits, coverage: target.coverage, splat };
+
+  for (const member of room.players.values()) send(member.ws, event);
 }
 
 // Parsed JSON has no boxed primitives or Symbol.toStringTag overrides.
 function jsonText(value) {
   return Object.prototype.toString.call(value) === '[object String]' ? value : '';
-}
-
-function validDescriptor(descriptor) {
-  return (
-    Array.isArray(descriptor) &&
-    descriptor.length === 12 &&
-    descriptor.every((x) => Number.isFinite(x) && x >= 0 && x <= 1)
-  );
 }
 
 export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {}) {
@@ -251,6 +228,8 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
 
       if (!room) {
         if (!['create', 'join', 'resume'].includes(m.type)) return error(ws, 'Join a room first');
+
+        if (m.type !== 'resume' && m.color !== undefined && !palette.includes(m.color)) return error(ws, 'Pick one of the five ink colors');
         let candidate;
 
         if (m.type === 'create') {
@@ -268,8 +247,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
             round: 0,
             startsAt: 0,
             endsAt: 0,
-            closingAt: null,
-            finalPair: null,
+            paintSeq: 0,
             players: new Map(),
           };
           rooms.set(code, candidate);
@@ -300,9 +278,8 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
             id: randomUUID(),
             token: randomBytes(24).toString('hex'),
             name: name || 'Player ' + (candidate.players.size + 1),
-            color: colors.find((c) => !taken.has(c)),
+            color: m.color ?? palette.find(c => !taken.has(c)) ?? palette[candidate.players.size % palette.length],
             ready: false,
-            descriptor: null,
           };
           resetPlayer(player);
           player.spectator = candidate.phase !== 'lobby';
@@ -320,13 +297,12 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
 
       if (player.ws !== ws) return;
 
-      if (
-        room.phase === 'playing' &&
-        (at >= room.endsAt || (room.closingAt !== null && at >= room.closingAt))
-      ) {
+      if (room.phase === 'playing' && at >= room.endsAt) {
         finishIfNeeded(room, at);
         broadcast(room, at);
       }
+
+      if (m.type === 'sync') return send(ws, { type:'state', room:snapshot(room, at) });
 
       if (m.type === 'leave') {
         send(ws, { type: 'left' });
@@ -335,10 +311,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
         player.offlineAt = at - graceMs;
 
         if (player.spectator || room.phase === 'lobby') room.players.delete(player.id);
-        else if (room.phase === 'playing' && player.health) {
-          player.health = 0;
-          player.outAt = at;
-        }
+        else if (room.phase === 'playing') player.health = 0;
 
         if (room.hostId === player.id) room.hostId = [...room.players.values()].find((p) => p.ws)?.id ?? null;
         finishIfNeeded(room, at);
@@ -348,37 +321,17 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
         return;
       }
 
-      if (m.type === 'ready' || m.type === 'descriptor') {
-        if (m.type === 'ready' && (room.phase !== 'lobby' || ![true, false].includes(m.ready)))
-          return error(ws, 'Ready up in the lobby');
-
-        if (m.descriptor !== undefined || m.type === 'descriptor') {
-          if (!validDescriptor(m.descriptor)) return error(ws, 'Invalid clothing descriptor');
-          const subject = m.targetId === undefined ? player : room.players.get(m.targetId);
-
-          if (
-            !subject ||
-            (subject !== player &&
-              (m.type !== 'descriptor' ||
-                room.hostId !== player.id ||
-                room.phase !== 'lobby' ||
-                subject.descriptor))
-          )
-            return error(ws, 'Only the host can fill a missing lobby descriptor');
-          subject.descriptor = m.descriptor;
-        }
-
-        if (m.type === 'ready') player.ready = m.ready;
+      if (m.type === 'color') {
+        if (room.phase !== 'lobby' || !palette.includes(m.color)) return error(ws, 'Pick a lobby ink color');
+        player.color = m.color;
+      } else if (m.type === 'ready') {
+        if (room.phase !== 'lobby' || ![true, false].includes(m.ready)) return error(ws, 'Ready up in the lobby');
+        player.ready = m.ready;
       } else if (m.type === 'start') {
-        const online = [...room.players.values()].filter((p) => p.ws);
+        const online = [...room.players.values()].filter(p => p.ws);
 
-        if (
-          room.hostId !== player.id ||
-          room.phase !== 'lobby' ||
-          online.length < 2 ||
-          online.some((p) => !p.ready || !p.descriptor)
-        )
-          return error(ws, 'To start, at least two players must join and every online player needs a ready camera and a shirt color');
+        if (room.hostId !== player.id || room.phase !== 'lobby' || online.length < 2)
+          return error(ws, 'The host needs at least two connected players to start');
 
         for (const p of room.players.values()) {
           resetPlayer(p);
@@ -388,8 +341,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
         room.phase = 'playing';
         room.startsAt = at + 3000;
         room.endsAt = room.startsAt + roundMs;
-        room.closingAt = null;
-        room.finalPair = null;
+        room.paintSeq = 0;
         room.round++;
       } else if (m.type === 'rematch') {
         if (room.hostId !== player.id || room.phase !== 'finished')
@@ -404,68 +356,8 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
             p.ready = false;
           }
         }
-      } else if (m.type === 'throw' || m.type === 'impact') {
-        if (room.phase !== 'playing' || room.round !== m.round || player.spectator || at < room.startsAt)
-          return;
-
-        if (
-          (player.health <= 0 || room.closingAt !== null) &&
-          !(m.type === 'impact' && player.id === room.finalPair?.[0])
-        )
-          return;
-
-        if (!/^[a-zA-Z0-9_:-]{1,80}$/.test(jsonText(m.shotId))) return error(ws, 'Invalid throw ID');
-
-        if (m.type === 'throw') {
-          if (at - player.lastThrow < 400 || player.shots.has(m.shotId)) return;
-          player.lastThrow = at;
-          player.shots.set(m.shotId, at);
-
-          return;
-        }
-
-        const launched = player.shots.get(m.shotId);
-
-        if (launched === undefined || launched === null || at - launched < 120 || at - launched > impactWindowMs)
-          return;
-        player.shots.set(m.shotId, null);
-        const target = room.players.get(m.targetId);
-
-        if (!target?.ws || target === player || target.spectator || target.health <= 0) return;
-        const { triangle, u, v } = m.anchor || {};
-
-        if (
-          !Number.isInteger(triangle) ||
-          triangle < 0 ||
-          triangle >= bodyTriangleCount ||
-          !Number.isFinite(u) ||
-          !Number.isFinite(v) ||
-          u < 0 ||
-          v < 0 ||
-          u + v > 1.00001
-        )
-          return;
-        target.splats.push({
-          id: player.id + '-' + m.shotId,
-          shooterId: player.id,
-          color: player.color,
-          triangle,
-          u,
-          v,
-          seed: randomInt(0x7fffffff),
-        });
-        target.health--;
-        player.hits++;
-
-        if (!target.health) {
-          target.outAt = at;
-          player.eliminations++;
-
-          if (room.finalPair?.[0] === player.id && room.finalPair[1] === target.id)
-            player.sharedWin = target.sharedWin = true;
-        }
-
-        finishIfNeeded(room, at, target.health === 0 ? target : null);
+      } else if (m.type === 'spray') {
+        return spray(room, player, m, at);
       } else {
         return error(ws, 'Unknown action');
       }
@@ -509,7 +401,6 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
           changed = true;
         } else if (room.phase === 'playing' && p.health > 0) {
           p.health = 0;
-          p.outAt = p.offlineAt + graceMs;
           changed = true;
         }
       }

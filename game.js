@@ -3,12 +3,24 @@ import QRCode from 'qrcode'
 import { createConnection } from './connection.js'
 import { createArena } from './arena.js'
 import { createTracker } from './public/tracking.js'
+import { inkColors } from './public/ink.js'
 
 const el = id => document.getElementById(id)
 const video = el('video')
-let room, myId, cameraReady = false, cameraBusy = false, cameraEpoch = 0
-let pendingDescriptor, descriptorSent = false, lastQr = '', noticeTimer, hintUntil = 0, timeOffset = 0, cameraMode
-let screen = 'entry', lastCountdown = '', connecting = false
+let room, myId, cameraReady = false, cameraBusy = false, cameraEpoch = 0, cameraNote = ''
+let lastQr = '', noticeTimer, hintUntil = 0, timeOffset = 0, pendingColor, colorSent = false
+let screen = 'entry', connecting = false, selectedTrack = null, namedGroup = false, arenaMessage = ''
+
+const me = () => room?.players.find(p => p.id === myId)
+const isHost = () => !!myId && room?.hostId === myId
+const serverTime = () => Date.now() + timeOffset
+const rivals = () => room.players.filter(p => p.id !== myId && p.connected && !p.spectator && p.health > 0)
+
+function showText(id, value) {
+  const node = el(id)
+
+  if (node.textContent !== value) node.textContent = value
+}
 
 function screenTo(next) {
   const changed = next !== screen
@@ -17,7 +29,7 @@ function screenTo(next) {
   el('leave').hidden = next === 'entry'
 
   if (changed) {
-    if (el('menuHelp').open) el('menuHelp').close()
+    for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close()
     const panel = el(next)
     panel.tabIndex = -1
     panel.focus({preventScroll:true})
@@ -32,56 +44,107 @@ function notice(message) {
   if (message) noticeTimer = setTimeout(() => {el('notice').textContent = ''}, 4500)
 }
 
-function cameraStatus(message) {
-  el('cameraStatus').textContent = message
-
-  if (message.startsWith('Tracking stopped')) {
-    cameraReady = false
-
-    if (room?.phase === 'lobby') connection.send({type:'ready',ready:false})
-    render()
-  }
-
-  if (screen === 'arena') sayArena(message)
-}
-
 function sayArena(message) {
-  hintUntil = performance.now() + 1500
-  el('arenaHint').textContent = message
+  arenaMessage = message
+  hintUntil = performance.now() + 1700
+  showText('arenaHint',message)
 }
 
 const tracker = createTracker(video,{
   onFrame: (...frame) => arena.setPeople(...frame),
-  onStatus:cameraStatus
+  onStatus(message) {
+    cameraNote = message
+
+    if (message.startsWith('Tracking stopped')) {
+      cameraReady = false
+      render()
+    }
+  }
 })
 
-const me = () => room?.players.find(p => p.id === myId)
-const isHost = () => !!myId && room?.hostId === myId
-const serverTime = () => Date.now() + timeOffset
-
-function canThrow() {
-  return room?.phase === 'playing' && room.startsAt <= serverTime() && room.endsAt > serverTime()
-    && cameraReady && connection.connected && me()?.health > 0 && !me().spectator
+function canIdentify() {
+  return room?.phase === 'playing' && !el('identify').open && cameraReady && connection.connected
 }
 
+function canSpray() {
+  return canIdentify() && room.startsAt <= serverTime() && room.endsAt > serverTime()
+    && me()?.health > 0 && !me().spectator
+}
+
+function chooseName(trackId) {
+  if (selectedTrack != null || !canIdentify()) return
+  const options = rivals()
+
+  if (!options.length) return
+  selectedTrack = trackId
+  el('nameOptions').replaceChildren(...options.map(p => {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.append(swatch(p.color), document.createTextNode(p.name))
+    button.addEventListener('click', () => {
+      const assigned = tracker.assign(trackId,p.id)
+      el('identify').close()
+
+      if (assigned) namedGroup = true
+      sayArena(assigned ? p.name + ' tagged.' : 'That person moved. Tap them again.')
+      render()
+    })
+
+    return button
+  }))
+  el('identify').showModal()
+}
+
+el('identify').addEventListener('close', () => { selectedTrack = null })
+
 const arena = createArena({
-  video, canvas:el('overlay'), launch:el('launch'), canThrow,
+  video, canvas:el('overlay'), canSpray, canIdentify, onIdentify:chooseName,
   send:m => connection.send(m), message:sayArena
 })
 
 function releaseCamera() {
   cameraEpoch++
-  document.body.dataset.sampling = 'false'
+  hintUntil = 0
   cameraReady = cameraBusy = false
-  cameraMode = null
+  cameraNote = ''
+  selectedTrack = null
+  namedGroup = false
   tracker.stop()
   arena.stop()
 }
 
+async function openCamera() {
+  if (screen !== 'arena' || cameraBusy || cameraReady) return
+  const epoch = ++cameraEpoch
+  cameraBusy = true
+  cameraNote = 'Opening rear camera…'
+  render()
+
+  try {
+    const started = await tracker.start()
+
+    if (epoch !== cameraEpoch || !started) return
+    cameraReady = true
+
+    if (!me()?.spectator) sayArena('Tap a rival to spray. Hold and drag to cover more.')
+  } catch (error) {
+    if (epoch !== cameraEpoch) return
+    tracker.stop()
+    cameraNote = error.name === 'NotAllowedError'
+      ? (me()?.spectator ? 'Enable your rear camera to watch the paint.' : 'Enable your rear camera to spray. Other players can still paint you.')
+      : error.message || 'Could not open the rear camera.'
+  } finally {
+    if (epoch === cameraEpoch) {
+      cameraBusy = false
+      render()
+    }
+  }
+}
+
 function reset(message) {
   releaseCamera()
-  room = myId = pendingDescriptor = null
-  descriptorSent = false
+  room = myId = pendingColor = null
+  colorSent = false
   lastQr = ''
   hintUntil = 0
   connecting = false
@@ -89,68 +152,6 @@ function reset(message) {
   el('joinForm').querySelector('button').disabled = false
   screenTo('entry')
   notice(message || '')
-}
-
-function publishDescriptor(signature) {
-  pendingDescriptor = signature
-  descriptorSent = connection.send({type:'descriptor', descriptor:signature})
-}
-
-async function syncCameraMode() {
-  if (!cameraReady || !room || cameraBusy || room.phase === 'finished') return
-  const mode = room.phase === 'playing' ? 'game' : isHost() ? 'host' : 'guest'
-
-  if (mode === cameraMode) return
-  cameraMode = mode
-  const epoch = cameraEpoch
-
-  try {
-    if (mode === 'game') await tracker.play()
-    else await tracker.lobby(isHost())
-  } catch (error) {
-    if (epoch === cameraEpoch) cameraStatus('Tracking stopped. ' + error.message)
-  }
-}
-
-async function openCamera(resample = false) {
-  if (cameraBusy || !room || room.phase === 'finished') return
-  const epoch = ++cameraEpoch
-  cameraBusy = true
-  el('retryCamera').disabled = true
-  el('cameraRetryLive').disabled = true
-  document.body.dataset.sampling = String(resample)
-  cameraStatus(resample ? 'Face the front camera and include your upper chest.' : 'Opening camera and checking shirt color…')
-
-  try {
-    const wasReady = cameraReady
-    const host = isHost()
-
-    const sampled = resample && wasReady ? await tracker.retrySelf()
-      : await tracker.start({host,registered:!resample && !!me()?.descriptor,onSelfSignature:publishDescriptor})
-
-    if (epoch !== cameraEpoch) return
-    cameraReady = true
-
-    if (!wasReady) cameraMode = host ? 'host' : 'guest'
-    cameraStatus(sampled || me()?.descriptor ? 'Camera ready' : 'Camera ready. To register your color, frame your shirt and tap Refresh color.')
-
-    if (room?.phase === 'lobby') connection.send({type:'ready',ready:true})
-  } catch (error) {
-    if (epoch !== cameraEpoch) return
-    cameraReady = false
-    cameraMode = null
-    tracker.stop()
-    cameraStatus(error.name === 'NotAllowedError' ? 'Allow camera access in your browser, then tap Retry camera.' : error.message)
-
-    if (room?.phase === 'lobby') connection.send({type:'ready',ready:false})
-  } finally {
-    if (epoch === cameraEpoch) {
-      cameraBusy = false
-      document.body.dataset.sampling = 'false'
-      render()
-      void syncCameraMode()
-    }
-  }
 }
 
 function inviteUrl() {
@@ -167,32 +168,52 @@ function textNode(tag, value) {
   return node
 }
 
+function swatch(color) {
+  const node = document.createElement('span')
+  node.className = 'swatch'
+  node.style.backgroundColor = color
+  node.setAttribute('aria-hidden','true')
+
+  return node
+}
+
 function playerRow(p, rank, detail) {
   const li = document.createElement('li')
 
   if (rank) {
     li.dataset.rank = String(rank)
     li.append(textNode('b',String(rank).padStart(2,'0')))
-  } else {
-    li.dataset.state = !p.connected ? 'offline' : p.ready && p.descriptor ? 'ready' : 'pending'
-  }
-
-  const swatch = document.createElement('span')
-  swatch.className = 'swatch'
-  swatch.style.backgroundColor = p.color
-  li.append(swatch,textNode('strong',p.name + (p.id === myId ? ' · you' : '')),textNode('small',detail))
+  } else li.dataset.state = p.connected ? 'ready' : 'offline'
+  li.append(swatch(p.color),textNode('strong',p.name + (p.id === myId ? ' · you' : '')),textNode('small',detail))
 
   return li
 }
 
+for (const {name,hex} of inkColors) {
+  const label = document.createElement('label')
+  const radio = document.createElement('input')
+  label.className = 'ink-pot'
+  label.style.setProperty('--ink-color',hex)
+  radio.type = 'radio'
+  radio.name = 'ink'
+  radio.value = hex
+  label.append(radio,textNode('span',name))
+  el('inkPalette').append(label)
+}
+
+el('inkPalette').addEventListener('change', event => {
+  pendingColor = event.target.value
+  colorSent = connection.send({type:'color',color:pendingColor})
+})
+
 function renderLobby() {
   const host = isHost()
   el('lobby').dataset.role = host ? 'host' : 'guest'
-  el('lobbyTitle').textContent = host ? 'Host room' : 'Room lobby'
-  el('roomCode').textContent = room.code
+  showText('lobbyTitle', host ? 'Host room' : 'Room lobby')
+  showText('roomCode',room.code)
   el('inviteReachability').hidden = !host || location.protocol === 'https:' && !['localhost','127.0.0.1','[::1]'].includes(location.hostname)
   el('inviteQr').parentElement.hidden = !host
-  el('inviteHeading').textContent = host ? 'Scan to join' : 'Room invite'
+  showText('inviteHeading', host ? 'Scan to join' : 'Room invite')
 
   if (host && lastQr !== room.code) {
     lastQr = room.code
@@ -200,53 +221,46 @@ function renderLobby() {
   }
 
   el('roster').replaceChildren(...room.players.map(p => playerRow(p,null,
-    !p.connected ? 'Reconnecting' : !p.ready ? 'Camera pending' : p.descriptor ? 'Ready' : 'Color pending')))
-  const online = room.players.filter(p => p.connected)
-  const ready = online.filter(p => p.ready && p.descriptor).length
-  el('rosterCount').textContent = online.length + ' / 8'
-  let status = host ? 'Everyone is ready. Start the round!' : 'Waiting for the host to start.'
+    p.connected ? inkColors.find(c => c.hex === p.color)?.name : 'Reconnecting')))
 
-  if (!connection.connected) status = 'Reconnecting to the room…'
-  else if (online.length < 2) status = 'Invite a second player to start.'
-  else if (ready !== online.length) status = ready + ' of ' + online.length + ' ready. Check cameras and shirt colors.'
-
-  if (el('lobbyStatus').textContent !== status) el('lobbyStatus').textContent = status
+  for (const radio of el('inkPalette').querySelectorAll('input')) radio.checked = radio.value === (pendingColor || me()?.color)
+  el('inkLocker').disabled = !connection.connected
+  const online = room.players.filter(p => p.connected).length
+  showText('rosterCount', online + ' / 8')
+  showText('lobbyStatus', !connection.connected ? 'Reconnecting to the room…' : online < 2
+    ? 'Invite a second player to start.' : host ? 'Your crew is in. Start when you’re ready.' : 'Waiting for the host to start.')
   el('startRound').hidden = !host
-  el('startRound').disabled = !connection.connected || online.length < 2 || ready !== online.length
-  el('retryCamera').disabled = cameraBusy
-  el('retryCamera').textContent = cameraReady ? 'Refresh color' : 'Retry camera'
+  el('startRound').disabled = !connection.connected || online < 2
 }
 
 function renderResults() {
   const first = room.leaderboard.filter(p => p.rank === 1)
-  el('winner').textContent = first.length === 1 ? first[0].name + ' wins!' : 'Shared first place'
+  showText('winner', !first[0]?.score ? 'No points scored' : first.length === 1 ? first[0].name + ' wins!' : 'Shared first place')
   el('standings').replaceChildren(...room.leaderboard.map(row => playerRow(
-    room.players.find(p => p.id === row.id) || row,row.rank,
-    row.hits + (row.hits === 1 ? ' hit' : ' hits') + ' · ' + row.eliminations + (row.eliminations === 1 ? ' KO' : ' KOs'))))
+    room.players.find(p => p.id === row.id) || row, row.rank, row.score + ' pts · ' + row.coverage + '% inked')))
   el('rematch').hidden = !isHost()
   el('rematch').disabled = !connection.connected
 }
 
 function updateClock() {
   if (screen !== 'arena' || !room) return
-  const before = Math.max(0,Math.ceil((room.startsAt-serverTime())/1000))
-  const left = Math.max(0,Math.ceil((room.endsAt-Math.max(serverTime(),room.startsAt))/1000))
-  el('clock').textContent = Math.floor(left/60)+':'+String(left%60).padStart(2,'0')
-  el('launch').disabled = !canThrow()
+  const now = serverTime()
+  const before = Math.max(0, Math.ceil((room.startsAt - now) / 1000))
+  const left = Math.max(0, Math.ceil((room.endsAt - Math.max(now,room.startsAt)) / 1000))
+  showText('clock', Math.floor(left / 60) + ':' + String(left % 60).padStart(2,'0'))
   const countdown = el('roundCountdown')
   countdown.hidden = !connection.connected || before === 0
 
-  if (!countdown.hidden && countdown.textContent !== String(before)) countdown.textContent = String(before)
+  if (!countdown.hidden) showText('roundCountdown',String(before))
 
-  if (performance.now() < hintUntil && !before) return
   const p = me()
 
-  const hint = !connection.connected ? 'Reconnecting…' : before ? 'Starting in '+before
-    : !cameraReady ? 'Open camera to track players' : p?.spectator ? 'Spectating this round'
-    : !p?.health ? 'You’re out · spectating' : ''
+  const hint = !connection.connected ? 'Reconnecting…' : before ? 'Starting in ' + before
+    : performance.now() < hintUntil ? arenaMessage
+    : !cameraReady && cameraNote ? cameraNote : p?.spectator || !p?.health ? 'Spectating this round'
+    : !cameraReady ? 'Open your rear camera to spray.' : ''
 
-  if (hint !== lastCountdown || el('arenaHint').textContent !== hint) el('arenaHint').textContent = hint
-  lastCountdown = hint
+  showText('arenaHint',hint)
 }
 
 function render() {
@@ -254,66 +268,50 @@ function render() {
   const next = room.phase === 'lobby' ? 'lobby' : room.phase === 'finished' ? 'results' : 'arena'
 
   if (screen !== next) {
+    if (screen === 'arena') releaseCamera()
     screenTo(next)
 
-    if (next === 'arena') arena.start()
+    if (next === 'arena') {
+      arena.start()
 
-    if (next === 'results') releaseCamera()
+      if (!me()?.spectator && me()?.health > 0) void openCamera()
+    }
   }
 
   if (next === 'lobby') renderLobby()
   else if (next === 'results') renderResults()
   else {
-    el('health').textContent = String(me()?.health ?? 0) + ' / 10'
-    el('hpMeter').value = me()?.health ?? 0
-    el('alive').textContent = String(room.players.filter(p => p.id !== myId && !p.spectator && p.health > 0).length)
-    el('cameraRetryLive').hidden = cameraReady && !!me()?.descriptor
-    el('cameraRetryLive').disabled = cameraBusy
-    el('cameraRetryLive').textContent = cameraReady ? 'Refresh color' : 'Open camera'
+    const self = me()
+    showText('score',String(self?.score ?? 0))
+    showText('coverage',(self?.coverage ?? 0) + '%')
+    el('arena').style.setProperty('--player-ink',self?.color || '#fff2d2')
+    el('cameraRetryLive').hidden = cameraReady || cameraBusy
+    showText('cameraRetryLive',self?.spectator ? 'Watch with camera' : 'Open rear camera')
+    el('resetNames').hidden = !namedGroup || !cameraReady || rivals().length < 2
     updateClock()
   }
 }
 
 const connection = createConnection({
+  onPaint: event => arena.receivePaint(event),
   onWelcome(welcome) {
     myId = welcome.playerId
-    descriptorSent = false
-    connecting = false
+    tracker.clearAssignments()
+
+    if (el('identify').open) el('identify').close()
+    namedGroup = colorSent = connecting = false
     notice('')
   },
   onState(next) {
-    const prev = room
-    const needsCamera = !prev || prev.phase === 'finished' && next.phase === 'lobby'
     room = next
-    timeOffset = next.serverNow-Date.now()
+    timeOffset = next.serverNow - Date.now()
+
+    if (pendingColor === me()?.color || room.phase !== 'lobby') pendingColor = null
+
+    if (pendingColor && !colorSent) colorSent = connection.send({type:'color',color:pendingColor})
     tracker.setRoster(room.players,myId)
     arena.setState(room,myId)
     render()
-
-    if (needsCamera && room.phase !== 'finished') void openCamera()
-    else void syncCameraMode()
-
-    if (prev && room.phase === 'lobby' && isHost()) {
-      for (const p of room.players) {
-        if (!p.descriptor && p.id !== myId && !prev.players.some(old => old.id === p.id)) {
-          tracker.observeJoin(p.id, signature => connection.send({type:'descriptor',targetId:p.id,descriptor:signature}))
-        }
-      }
-    }
-
-    // A room snapshot after reconnect may lag a local camera change made offline.
-    if (!cameraBusy && room.phase === 'lobby' && me()?.ready !== cameraReady) connection.send({type:'ready',ready:cameraReady})
-
-    if (pendingDescriptor) {
-      const stored = me()?.descriptor
-
-      if (stored?.length === pendingDescriptor.length && stored.every((value,i) => value === pendingDescriptor[i])) {
-        pendingDescriptor = null
-        descriptorSent = false
-      } else if (!descriptorSent && room.phase !== 'finished') {
-        descriptorSent = connection.send({type:'descriptor',descriptor:pendingDescriptor})
-      }
-    }
   },
   onStatus(message) {notice(message); render()},
   onReset:reset
@@ -342,9 +340,14 @@ el('startRound').addEventListener('click', () => connection.send({type:'start'})
 
 el('rematch').addEventListener('click', () => connection.send({type:'rematch'}))
 
-el('retryCamera').addEventListener('click', () => openCamera(true))
+el('cameraRetryLive').addEventListener('click', () => void openCamera())
 
-el('cameraRetryLive').addEventListener('click', () => openCamera(true))
+el('resetNames').addEventListener('click', () => {
+  tracker.clearAssignments()
+  namedGroup = false
+  sayArena('Tap a person to tag their name again.')
+  render()
+})
 
 el('leave').addEventListener('click', () => {connection.leave(); reset('You left the room')})
 

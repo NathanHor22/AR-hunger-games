@@ -1,6 +1,6 @@
 # Tomato Riot
 
-A phone-browser tomato battle for 2–8 people in the same room. Create a room, share its QR, and swipe upward from the tomato to throw. Each player starts with ten health. The last survivor wins, or the leaderboard settles the round after 90 seconds.
+A local AR ink fight for 2–8 people on their phones. Share a room QR, pick an ink color, and tap a rival to spray. Paint fresh areas of other players to earn points over a 90-second round.
 
 ## Hosted game
 
@@ -23,19 +23,19 @@ The Node server serves the site, model, WASM and WebSocket endpoint at `/ws`. Ru
 
 ## Playtest
 
-1. Open the same HTTPS site on the host phone, create a room and allow the camera. Other players scan the room QR, tap Join and allow their cameras. The app checks shirt colors briefly with the front camera. The host can also register a single new shirt as a player joins.
-2. If a player shows **Color pending**, tap **Refresh color** on that phone, keeping their face and upper chest in the front camera view. Distinct shirt colors work best for this prototype. Similar shirts, partial bodies or overlapping players can temporarily prevent target selection.
-3. Point the rear camera at a registered rival. Their name and health appear above their head. Touch the tomato at the bottom, swipe toward them and lift to throw. The swipe angle and length set the landing point. Hits stick to the tracked head, torso, arms and legs.
-4. Check a shoulder hit from two viewpoints, then turn, cross in front of another player and step back. A reacquired player should still carry the same paint. A temporarily disconnected player has 25 seconds to rejoin their seat. The host role passes to another connected player when necessary.
-5. At the end, compare hits and knockouts across phones. The host can open a rematch in the same room.
+1. Create a room, then have friends scan the QR and join. Choose the color that appears on your body when another player paints you. Friends can pick the same color.
+2. Start with two or more connected players. Allow the rear camera when the round opens. In a duel, frame your rival alone. In a group, tap an unnamed person and pick their name. Tag again if the game loses track of who is who.
+3. Tap a rival for one burst, or hold and drag to spray continuously. Aim at different areas of their head, torso, arms and legs. Each previously unpainted area earns points for the first player to cover it.
+4. The percentage above a rival shows how much of them is painted. Your phone shows your score and how much ink is on you. A dropped connection has a 25-second grace period.
+5. At the end, the leaderboard ranks players by fresh coverage points. The host can open a rematch in the same room.
 
 ## How the prototype works
 
-Each device processes camera frames locally. A compact shirt-color descriptor is shared within the room. Similar colors and crossings suppress uncertain matches. This is experimental identification for casually dressed groups. A bystander in matching clothing can still be confused with a participant.
+Each device processes its camera frames locally. In a two-player round, the sole visible person is assumed to be the rival. Group names are assigned on each phone and followed through position and pose continuity. A prolonged loss of view or an ambiguous crossing can require naming someone again.
 
-The renderer fits projected, articulated mesh surfaces to pose landmarks. Each impact stores its triangle, two barycentric coordinates, paint color and shape seed. Each observer reconstructs the mark on their own estimate of the same moving body. Dynamic clothing folds, room-scale calibrated depth and full-body photogrammetry are outside the prototype's geometry.
+The renderer fits articulated surfaces to pose landmarks. Each spray that covers fresh area stores its triangle, two barycentric coordinates, ink color and shape seed. Observers use that anchor to draw the splat on the moving body from their own camera angle. Depth comes from the pose and apparent body size in each camera view.
 
-The shooter's browser estimates collision. The server owns health, cooldowns, eliminations, time, rankings and room-scoped resume credentials. All rooms are in memory and expire after abandonment. Restarting the server ends active rooms.
+The shooter's browser estimates contact. The server enforces the firing interval and tracks painted cells on each player's body. Peers receive confirmed paint updates, scores and rankings. All rooms are in memory and expire after abandonment. Restarting the server ends active rooms.
 
 ## Checks
 

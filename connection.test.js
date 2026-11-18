@@ -29,6 +29,7 @@ function tab(t, options = {}, values = new Map()) {
     connection = createConnection({
       onWelcome: message => events.emit('welcome', message),
       onState: room => events.emit('state', room),
+      onPaint: event => events.emit('paint', event),
       onStatus: message => events.emit('status', message),
       onReset: message => events.emit('reset', message),
     });
@@ -168,6 +169,36 @@ test('retry delay is capped, and supersession clears credentials and cancels rec
   assert.match(resets[0], /another tab/);
   assert.equal(timers.size, 0);
   assert.equal(connection.restore(), false);
+});
+
+test('paint deltas apply once and recover missing events from a full snapshot', t => {
+  const { connection, events, sockets } = simulatedTab(t);
+  const states = [];
+  const confirmed = [];
+  events.on('paint', event => confirmed.push(event.seq));
+  events.on('state', room => states.push(room));
+  connection.enter({type:'join',code:welcome.code,color:'#49e066'});
+  const [socket] = sockets;
+  socket.open();
+  assert.equal(socket.sent[0].color,'#49e066');
+  socket.receive(welcome);
+  const room = {code:welcome.code, round:1, phase:'playing', paintSeq:0, players:['a','b'].map(id => ({id,score:0,hits:0,splats:[],coverage:0}))};
+  const first = {type:'paint',code:room.code,round:1,seq:1,shooterId:'a',targetId:'b',splat:{id:'one'},score:12,coverage:.8,hits:1,serverNow:1000};
+  socket.receive({type:'state',room});
+  socket.receive(first);
+  socket.receive(first);
+  assert.equal(states.length,2);
+  assert.equal(states[1].players[1].splats.length,1);
+  assert.equal(states[0].players[1].splats.length,0);
+  assert.equal(states[1].leaderboard[0].score,12);
+  socket.receive({...first,seq:3});
+  socket.receive({...first,seq:4});
+  assert.deepEqual(socket.sent.slice(1),[{type:'sync'}]);
+  socket.receive({type:'state',room:{...states[1],paintSeq:4}});
+  socket.receive({...first,seq:5,hits:5,splat:undefined});
+  assert.equal(states.at(-1).players[0].hits,5);
+  assert.equal(states.at(-1).players[1].splats.length,1);
+  assert.deepEqual(confirmed,[1,5]);
 });
 
 test('restore respects the invite, and terminal errors allow a fresh join', t => {

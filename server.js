@@ -208,9 +208,9 @@ function validDescriptor(descriptor) {
   );
 }
 
-export function createGameServer({ now = Date.now, tls } = {}) {
+export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {}) {
   const server = tls ? httpsServer(tls, serve) : httpServer(serve);
-  const sockets = new WebSocketServer({ server, path: '/ws', maxPayload: 8192 });
+  const sockets = new WebSocketServer({ server, path: socketPath, maxPayload: 8192 });
   const rooms = new Map();
   sockets.on('connection', (ws) => {
     let room,

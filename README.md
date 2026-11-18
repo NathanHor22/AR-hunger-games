@@ -1,6 +1,12 @@
-﻿# Tomato Riot
+# Tomato Riot
 
 A phone-browser tomato battle for 2–8 people in the same room. Create a room, share its QR, and swipe upward from the tomato to throw. Each player starts with ten health. The last survivor wins, or the leaderboard settles the round after 90 seconds.
+
+## Hosted game
+
+[Play Tomato Riot](https://ar-hunger-games.vercel.app/). The Vercel deployment serves the camera model and browser runtime from the same HTTPS origin. The Singapore function accepts room connections at `/ws`.
+
+Rooms live in function memory. A cold restart ends a room, and a join or reconnect routed to another instance can report an expired room. For a larger event, use the single-server deployment below or add shared room storage and event delivery. [Vercel WebSocket guide](https://vercel.com/docs/functions/websockets)
 
 ## Run
 

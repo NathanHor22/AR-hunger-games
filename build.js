@@ -1,5 +1,5 @@
-﻿import { build } from 'esbuild'
-import { copyFile, mkdir } from 'node:fs/promises'
+import { build } from 'esbuild'
+import { copyFile, cp, mkdir } from 'node:fs/promises'
 
 await mkdir('dist/assets', { recursive: true })
 
@@ -14,4 +14,10 @@ await build({
   outdir: 'dist'
 })
 
-await Promise.all(['index.html', 'style.css'].map(file => copyFile(file, 'dist/' + file)))
+await Promise.all([
+  copyFile('index.html', 'dist/index.html'),
+  copyFile('style.css', 'dist/style.css'),
+  copyFile('assets/pose.task', 'dist/pose.task'),
+  copyFile('assets/LICENSE-2.0.txt', 'dist/assets/LICENSE-2.0.txt'),
+  cp('node_modules/@mediapipe/tasks-vision/wasm', 'dist/vision-wasm', { recursive: true })
+])

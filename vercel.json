@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "fluid": true,
+  "regions": ["sin1"],
+  "functions": {
+    "api/ws.js": { "maxDuration": 300 }
+  },
+  "rewrites": [
+    { "source": "/ws", "destination": "/api/ws" }
+  ]
+}

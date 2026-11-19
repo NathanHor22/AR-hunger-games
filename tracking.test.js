@@ -18,9 +18,12 @@ function person(x, size = 1) {
 test('a solo rival auto-binds with no enrollment and ignores chosen ink and shirt appearance', () => {
   const tracks = createPoseTracks();
   tracks.setRoster(roster('a','b'), 'a');
-  assert.equal(tracks.update([person(.45)], 0, 640,480)[0].id, null);
+  const [first] = tracks.update([person(.45)], 0, 640,480);
+  assert.equal(first.id, null);
+  assert.equal(first.trackId, null);
   const [rival] = tracks.update([person(.46)], 85, 640,480);
   assert.equal(rival.id, 'b');
+  assert.equal(rival.trackId, first.candidateTrackId);
   assert.ok(rival.trackId);
   tracks.setRoster([...roster('a'), {id:'b', connected:false}], 'a');
   assert.equal(tracks.update([person(.47)], 170, 640,480)[0].id, null);
@@ -51,7 +54,9 @@ test('groups map names manually, survive short dropouts and discard binding at a
   step(260,.66);
   assert.equal(tracks.assign(left.trackId,'a',270), false);
   assert.deepEqual(step(360,.32,.64).map(p=>p.id), ['a','b']);
-  assert.deepEqual(step(450,.48,.51).map(p=>p.trackId), [null,null]);
+  const overlap = step(450,.48,.51);
+  assert.deepEqual(overlap.map(p=>p.trackId), [null,null]);
+  assert.deepEqual(overlap.map(p=>p.candidateTrackId), [null,null]);
   assert.equal(tracks.assign(left.trackId,'a',460), false);
   step(550,.68,.3);
   const apart = step(640,.70,.28);
@@ -147,4 +152,97 @@ test('lobby and roster changes never request a camera, and stopping safely handl
   release({getTracks:()=>[{stop:()=>{stopped++}}]});
   assert.equal(await first,false);
   assert.equal(stopped,1);
+});
+
+test('a tap freezes preview pixels through model startup and waits its turn behind in-flight inference', {timeout:5000}, async t => {
+  const initialization = Promise.withResolvers();
+  let nextInput = Promise.withResolvers();
+  let now = 100;
+  t.mock.method(performance,'now',() => now);
+
+  class Canvas {
+    constructor(width,height) { Object.assign(this,{width,height}); }
+    getContext() { return {drawImage:video => { this.pixel = video.pixel; }}; }
+    transferToImageBitmap() {
+      return {pixel:this.pixel,width:this.width,height:this.height,close() {}};
+    }
+  }
+
+  class Worker {
+    postMessage({frame}) {
+      if (!frame) initialization.resolve(() => this.onmessage({data:{ready:true}}));
+      else nextInput.resolve({frame,finish:() => this.onmessage({data:{people:[person(.5)]}})});
+    }
+    terminate() {}
+  }
+
+  for (const [owner,key,val] of [
+    [globalThis,'OffscreenCanvas',Canvas], [globalThis,'Worker',Worker], [globalThis,'createImageBitmap',() => {}],
+    [navigator,'mediaDevices',{getUserMedia:async () => ({active:true,getTracks:()=>[],getVideoTracks:()=>[]})}],
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner,key);
+    Object.defineProperty(owner,key,{configurable:true,value:val});
+    t.after(() => { if (descriptor) Object.defineProperty(owner,key,descriptor); else delete owner[key]; });
+  }
+
+  async function takeInput() {
+    const request = await nextInput.promise;
+    nextInput = Promise.withResolvers();
+
+    return request;
+  }
+
+  const video = {readyState:2, videoWidth:640, videoHeight:480, currentTime:1, pixel:10, play:async () => {}};
+  const frames = [];
+  const tracker = createTracker(video,{onFrame:(people,at,token) => frames.push({people,at,token})});
+  t.after(() => tracker.stop());
+  assert.equal(tracker.captureTap(),null);
+  tracker.setRoster(roster('me','rival'),'me');
+  const started = tracker.start();
+  const ready = await initialization.promise;
+  const superseded = tracker.captureTap();
+  Object.assign(video,{pixel:20,currentTime:2});
+  const shot = tracker.captureTap();
+  assert.ok(shot && superseded && shot !== superseded);
+  Object.assign(video,{pixel:30,currentTime:3});
+  now = 5000;
+  ready();
+  assert.equal(await started,true);
+
+  const saved = await takeInput();
+  assert.deepEqual([saved.frame.pixel,saved.frame.width,saved.frame.height],[20,427,320]);
+  saved.finish();
+  const live = await takeInput();
+  assert.equal(live.frame.pixel,30);
+  assert.equal(frames[0].token,shot);
+  assert.equal(frames[0].at,100);
+  assert.equal(frames[0].people[0].id,null);
+  const candidate = frames[0].people[0].candidateTrackId;
+
+  Object.assign(video,{pixel:40,currentTime:4});
+  tracker.captureTap();
+  Object.assign(video,{pixel:50,currentTime:5});
+  const newest = tracker.captureTap();
+  Object.assign(video,{pixel:60,currentTime:6});
+  live.finish();
+  const queued = await takeInput();
+  assert.equal(queued.frame.pixel,50);
+  assert.equal(frames[1].people[0].trackId,candidate);
+  assert.equal(frames[1].people[0].id,'rival');
+  queued.finish();
+  const last = await takeInput();
+  assert.equal(frames[2].token,newest);
+  assert.equal(last.frame.pixel,60);
+
+  Object.assign(video,{pixel:70,currentTime:7});
+  const cleared = tracker.captureTap();
+  tracker.clearAssignments();
+  Object.assign(video,{pixel:80,currentTime:8});
+  last.finish();
+  const afterReset = await takeInput();
+  assert.equal(afterReset.frame.pixel,80);
+  assert.ok(!frames.some(f => f.token === cleared));
+  tracker.stop();
+  assert.equal(tracker.captureTap(),null);
+  assert.deepEqual(frames.at(-1).people,[]);
 });

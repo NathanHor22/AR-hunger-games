@@ -241,6 +241,7 @@ export function createArena({
   canSpray,
   canIdentify = canSpray,
   onIdentify,
+  captureTap,
 }) {
   const ctx = canvas.getContext("2d");
   const overlay = document.createElement("canvas");
@@ -310,31 +311,27 @@ export function createArena({
     if (next.phase !== "playing") clearInput();
   }
 
-  function prepareScene(width, height) {
-    if (lastPose === frameAt && width === sceneWidth && height === sceneHeight)
-      return;
-    scene = [];
-    camera = cover(video.videoWidth, video.videoHeight, width, height);
+  function projectPeople(detections, vw, vh, width, height) {
+    return detections.map(person => {
+      const points = project(person.landmarks, vw, vh, width, height);
 
-    for (const person of people) {
-      const points = project(
-        person.landmarks,
-        video.videoWidth,
-        video.videoHeight,
-        width,
-        height,
-      );
-
-      const body = makeBody(points, person.worldLandmarks, width, height);
-      scene.push({
-        body,
+      return {
+        body: makeBody(points, person.worldLandmarks, width, height),
         points,
         mask: person.mask,
         trackId: person.trackId,
+        candidateTrackId: person.candidateTrackId,
         id: person.id,
         player: room?.players.find((p) => p.id === person.id && p.id !== myId),
-      });
-    }
+      };
+    });
+  }
+
+  function prepareScene(width, height) {
+    if (lastPose === frameAt && width === sceneWidth && height === sceneHeight)
+      return;
+    camera = cover(video.videoWidth, video.videoHeight, width, height);
+    scene = projectPeople(people, video.videoWidth, video.videoHeight, width, height);
 
     lastPose = frameAt;
     sceneWidth = width;
@@ -358,9 +355,8 @@ export function createArena({
 
     if ((!armed && !(initial && canIdentify())) || now < nextAt) return;
 
-    if (pendingTap && now - pendingTap.at <= 900 && !initial) return;
+    if (pendingTap?.token || (pendingTap && now - pendingTap.at <= 900 && !initial)) return;
     pendingTap = null;
-    nextAt = now + sprayIntervalMs;
 
     const width = canvas.clientWidth,
       height = canvas.clientHeight;
@@ -377,16 +373,6 @@ export function createArena({
 
       hit = tag ? { trackId: tag.trackId } : contactAt(scene, point.x, point.y, camera, mask);
 
-      if (hit?.targetId && !fresh(now)) {
-        if (armed) {
-          const person = scene.find((p) => p.player?.id === hit.targetId);
-          pendingTap = { point: { x: point.x, y: point.y }, at: now, targetId: hit.targetId, trackId: person.trackId };
-
-          return;
-        }
-
-        hit = null;
-      }
     }
 
     if (hit?.trackId != null) {
@@ -399,18 +385,39 @@ export function createArena({
     }
 
     if (!armed) return;
+    nextAt = now + sprayIntervalMs;
+
+    if (initial && (!hit || !fresh(now)) && width && height && video.videoWidth && video.videoHeight) {
+      const token = captureTap?.();
+
+      if (token) {
+        const rivals = room.players.filter(p => p.id !== myId && !p.spectator);
+        const rival = rivals.length === 1 && rivals[0].connected && rivals[0].health > 0 ? rivals[0] : null;
+        const aim = { x:point.x, y:point.y };
+        pendingTap = { token, point:aim, width, height, vw:video.videoWidth, vh:video.videoHeight,
+          rival, burst: rival || hit ? emitSpray(aim, now, null) : null };
+
+        return;
+      }
+    }
+
+    if (hit && !fresh(now)) {
+      const person = scene.find(p => p.player?.id === hit.targetId);
+      pendingTap = { point:{ x:point.x, y:point.y }, at:now, targetId:hit.targetId, trackId:person.trackId };
+
+      return;
+    }
 
     if (!hit && initial && (!fresh(now) || !scene.length))
       message("Frame the player’s upper body, then tap them.");
     emitSpray(point, now, hit);
   }
 
-  function emitSpray(point, now, hit) {
+  function emitSpray(point, now, hit, burst, bodyRadius) {
     const color = room.players.find((p) => p.id === myId)?.color || "#fff2d2";
     let radius = 8;
 
     if (hit) {
-      const target = scene.find((p) => p.player?.id === hit.targetId);
       const { triangle, u, v } = hit.anchor;
 
       if (
@@ -423,18 +430,69 @@ export function createArena({
         })
       )
         return;
-      radius = Math.max(12, Math.min(34, target.body.radius * 0.34));
+      const size = bodyRadius ?? scene.find(p => p.player?.id === hit.targetId).body.radius;
+      radius = Math.max(12, Math.min(34, size * 0.34));
     }
 
-    bursts.push({
+    if (burst) {
+      Object.assign(burst, { hit, radius });
+
+      return burst;
+    }
+
+    burst = {
       ...point,
       at: now,
       color,
       radius,
       phase: Math.random() * Math.PI * 2,
       hit,
-    });
+    };
+    bursts.push(burst);
     splatSound(audio, hit ? 335 : 205, hit ? 0.037 : 0.017);
+
+    return burst;
+  }
+
+  function finishCapture(tap) {
+    if (tap.hit) {
+      const now = performance.now();
+      nextAt = now + sprayIntervalMs;
+      emitSpray(tap.point, now, tap.hit, tap.burst, tap.radius);
+    } else if (canIdentify()) onIdentify(tap.trackId);
+  }
+
+  function resolveCapture(tap, detections) {
+    pendingTap = null;
+
+    if (!canSpray()) return;
+    const { vw, vh, width, height, point } = tap;
+    const captured = projectPeople(detections, vw, vh, width, height);
+
+    for (const p of captured) p.trackId ??= p.candidateTrackId;
+
+    // Only a duel has a known candidate before the tracker binds a name.
+    if (captured.length === 1 && !captured[0].id && captured[0].trackId != null) captured[0].player = tap.rival;
+    const hit = contactAt(captured, point.x, point.y, cover(vw, vh, width, height));
+
+    if (!hit) {
+      if (!tap.burst) emitSpray(point, performance.now(), null);
+
+      return;
+    }
+
+    const person = hit.targetId ? captured.find(p => p.player?.id === hit.targetId) : captured.find(p => p.trackId === hit.trackId);
+    tap.hit = hit.targetId ? hit : null;
+    tap.radius = person.body?.radius;
+    tap.trackId = person.trackId;
+
+    if (person.id || (!hit.targetId && detections.some(p => p.trackId === person.trackId))) {
+      finishCapture(tap);
+    } else {
+      // Keep the contact from the tap image. The next observation confirms only identity.
+      tap.confirmTrack = true;
+      pendingTap = tap;
+    }
   }
 
   function checkPending(now) {
@@ -683,12 +741,23 @@ export function createArena({
       inkedUntil = now + 1150;
       inkedColor = color;
     },
-    setPeople(value, capturedAt) {
+    setPeople(value, capturedAt, token) {
       const now = performance.now();
+
+      if (pendingTap?.token && token === pendingTap.token && !pendingTap.confirmTrack) {
+        resolveCapture(pendingTap, value);
+      } else if (pendingTap?.confirmTrack && !token) {
+        const tap = pendingTap;
+        pendingTap = null;
+        const same = value.find(p => p.trackId === tap.trackId);
+
+        if (canSpray() && same && (tap.hit ? same.id === tap.hit.targetId : !same.id)) finishCapture(tap);
+      }
 
       if (capturedAt != null && !value.length) {
         missedAt = Math.min(missedAt, now);
-        pendingTap = null;
+
+        if (!pendingTap?.token) pendingTap = null;
 
         return;
       }
@@ -700,8 +769,8 @@ export function createArena({
       lastPose = -Infinity;
       deliveredAt = now;
 
-      if (value.length) checkPending(now);
-      else pendingTap = null;
+      if (!value.length) clearInput();
+      else if (!pendingTap?.token) checkPending(now);
     },
     start() {
       if (!animation) animation = requestAnimationFrame(draw);

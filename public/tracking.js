@@ -1,30 +1,25 @@
 import { createPoseTracks } from './pose-tracks.js';
 
+function modelInput(video, surface, freeze = false) {
+  const w = video.videoWidth, h = video.videoHeight;
+  const scale = Math.min(1, 320 / Math.min(w,h), 640 / Math.max(w,h));
+
+  if (scale === 1 && !freeze) return video;
+  const width = Math.max(1, Math.round(w * scale)), height = Math.max(1, Math.round(h * scale));
+  surface ??= globalThis.OffscreenCanvas ? new OffscreenCanvas(width,height) : document.createElement('canvas');
+  const context = surface.getContext('2d', { alpha:false });
+
+  if (!context) return freeze ? null : video;
+
+  if (surface.width !== width) surface.width = width;
+
+  if (surface.height !== height) surface.height = height;
+  context.drawImage(video, 0,0,width,height);
+
+  return surface;
+}
+
 async function createInference() {
-  let surface, context;
-
-  function modelInput(video) {
-    const w = video.videoWidth, h = video.videoHeight;
-    const scale = Math.min(1, 320 / Math.min(w,h), 640 / Math.max(w,h));
-
-    if (scale === 1) return video;
-    const width = Math.max(1, Math.round(w * scale)), height = Math.max(1, Math.round(h * scale));
-
-    if (!surface) {
-      surface = globalThis.OffscreenCanvas ? new OffscreenCanvas(width,height) : document.createElement('canvas');
-      context = surface.getContext('2d', { alpha:false });
-    }
-
-    if (!context) return video;
-
-    if (surface.width !== width) surface.width = width;
-
-    if (surface.height !== height) surface.height = height;
-    context.drawImage(video, 0,0,width,height);
-
-    return surface;
-  }
-
   if (globalThis.Worker && globalThis.OffscreenCanvas && globalThis.createImageBitmap) {
     let worker;
     let rejectPending;
@@ -43,8 +38,7 @@ async function createInference() {
       await request({ type: 'init' });
 
       return {
-        async detect(video) {
-          const input = modelInput(video);
+        async detect(input) {
           const frame = input.transferToImageBitmap ? input.transferToImageBitmap() : await createImageBitmap(input);
 
           try {
@@ -68,15 +62,13 @@ async function createInference() {
 
   const { openDetector } = await import('./pose-worker.js');
 
-  const detector = await openDetector();
-
-  return { detect:video => detector.detect(modelInput(video)), close:detector.close };
+  return openDetector();
 }
 
 export function createTracker(video, { onFrame = () => {}, onStatus = () => {} } = {}) {
   const tracks = createPoseTracks();
   let generation = 0, stream = null, inference = null, opening = null;
-  let timer, latest;
+  let timer, latest, pendingTap, assignments = 0;
 
   function stop() {
     generation++;
@@ -84,6 +76,7 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
     opening = null;
     tracks.clear();
     latest = null;
+    pendingTap = null;
 
     for (const track of stream?.getTracks() ?? []) track.stop();
     stream = null;
@@ -94,22 +87,33 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
   }
 
   function tickFrames(token) {
-    let previousTime = -1;
+    let previousTime = -1, surface;
 
     async function tick() {
       if (token !== generation) return;
-      const capturedAt = performance.now();
+      const tap = pendingTap;
+      pendingTap = null;
+      const capturedAt = tap?.at ?? performance.now();
+      const mediaTime = tap?.mediaTime ?? video.currentTime;
+      const revision = assignments;
 
       try {
-        if (video.readyState >= 2 && video.currentTime !== previousTime) {
-          previousTime = video.currentTime;
-          const width = video.videoWidth, height = video.videoHeight;
-          const result = await inference.detect(video);
+        if (tap || (video.readyState >= 2 && mediaTime !== previousTime)) {
+          const repeated = previousTime === mediaTime;
+          previousTime = mediaTime;
+          const width = tap?.width ?? video.videoWidth, height = tap?.height ?? video.videoHeight;
+          const input = tap?.image ?? modelInput(video,surface);
+
+          if (!tap && input !== video) surface = input;
+          const result = await inference.detect(input);
 
           if (token !== generation) return;
-          const people = tracks.update(result.people, capturedAt, width, height, performance.now());
-          latest = { people, capturedAt };
-          onFrame(people, capturedAt);
+
+          if (revision === assignments) {
+            const people = tracks.update(result.people, capturedAt, width, height, performance.now(), !!tap, repeated);
+            latest = { people, capturedAt };
+            onFrame(people, capturedAt, tap?.token);
+          }
         }
       } catch (error) {
         if (token === generation) {
@@ -186,6 +190,22 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
       return opening;
     },
     stop,
+    captureTap() {
+      if (!stream?.active || video.srcObject !== stream || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return null;
+      const at = performance.now(), mediaTime = video.currentTime;
+
+      try {
+        const image = modelInput(video,pendingTap?.image,true);
+
+        if (!image) return null;
+        pendingTap = { image, at, mediaTime, width:video.videoWidth, height:video.videoHeight, token:{} };
+
+        return pendingTap.token;
+      } catch {
+        // A camera can end between checking readyState and sampling its pixels.
+        return null;
+      }
+    },
     setRoster:tracks.setRoster,
     assign(trackId, playerId) {
       if (!latest || !tracks.assign(trackId, playerId, performance.now())) return false;
@@ -201,6 +221,8 @@ export function createTracker(video, { onFrame = () => {}, onStatus = () => {} }
     clearAssignments() {
       tracks.clear();
       latest = null;
+      pendingTap = null;
+      assignments++;
       onFrame([]);
     },
   };

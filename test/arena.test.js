@@ -159,6 +159,120 @@ test("a released tap can settle once from slow inference; loss, changed identity
   assert.equal(sprays.length, 1);
 });
 
+function startupRound(t, canSpray = () => true) {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const canvas = arenaCanvas(t, {}, { cancelAnimationFrame() {} });
+  const rival = { ...contestant("rival"), id:"rival", trackId:7 };
+  const self = { id:"self", connected:true, health:10, spectator:false, color:"#319cff" };
+  const room = { phase:"playing", code:"123456", round:1, players:[self,rival.player] };
+  const send = t.mock.fn(() => true);
+  const captureTap = t.mock.fn(() => Symbol("captured video frame"));
+  const onIdentify = t.mock.fn();
+
+  const arena = createArena({
+    video:{videoWidth:640, videoHeight:480, readyState:4}, canvas, canSpray,
+    captureTap, onIdentify, send, message() {},
+  });
+
+  arena.setState(room,self.id);
+
+  function pointer(type, x = 140, y = 186) {
+    canvas.dispatchEvent(Object.assign(new Event(type), {
+      pointerId:1, isPrimary:true, button:0, clientX:x, clientY:y,
+    }));
+  }
+
+  function token() {
+    assert.equal(captureTap.mock.callCount(),1, "one touch captures one camera frame");
+
+    return captureTap.mock.calls[0].result;
+  }
+
+  return { arena, rival, room, send, onIdentify, pointer, token, advance(ms) { now += ms; } };
+}
+
+test("the first released tap scores once from its own camera frame after model startup", t => {
+  const { arena, rival, send, pointer, token, advance } = startupRound(t);
+  pointer("pointerdown");
+  pointer("pointermove", 0, 0);
+  pointer("pointerup", 0, 0);
+  const frame = token();
+  arena.setPeople([rival],980);
+  assert.equal(send.mock.callCount(),0, "an earlier live frame cannot resolve the saved tap");
+
+  advance(1600);
+  const unbound = { ...rival, id:null, trackId:null, candidateTrackId:rival.trackId };
+  arena.setPeople([unbound],1000,frame);
+  assert.equal(send.mock.callCount(),0, "wait for the second observation to confirm the rival");
+  const shifted = {...rival,landmarks:rival.landmarks.map(p => ({...p,x:p.x+.05}))};
+  arena.setPeople([shifted],2600);
+  arena.setPeople([rival],1000,frame);
+  arena.setPeople([shifted],2685);
+  assert.equal(send.mock.callCount(),1);
+  const [shot] = send.mock.calls[0].arguments;
+  const {triangle,u,v} = contactAt([rival],140,186,camera).anchor;
+  assert.equal(shot.targetId,rival.id);
+  assert.deepEqual(shot.anchor,{triangle,u,v});
+});
+
+test("a named rival on a slow camera can receive one released tap after the usual prediction deadline", t => {
+  const { arena, rival, send, pointer, token, advance } = startupRound(t);
+  arena.setPeople([rival],350);
+  advance(250);
+  pointer("pointerdown");
+  pointer("pointerup");
+  const frame = token();
+  advance(1300);
+  arena.setPeople([rival],1250,frame);
+  arena.setPeople([rival],2550);
+  assert.equal(send.mock.callCount(),1);
+  assert.equal(send.mock.calls[0].arguments[0].targetId,rival.id);
+});
+
+test("a saved group tap opens the name picker only for the person seen at the time of the touch", async t => {
+  for (const samePerson of [true,false]) {
+    await t.test(samePerson ? "same track" : "replacement track", subtest => {
+      const { arena, room, rival, send, onIdentify, pointer, token, advance } = startupRound(subtest);
+      arena.setState({...room,players:[...room.players,contestant("third").player]},"self");
+      pointer("pointerdown");
+      pointer("pointerup");
+      const frame = token();
+      advance(800);
+      arena.setPeople([{...rival,id:null,trackId:null,candidateTrackId:7}],1000,frame);
+      const stable = {...rival,id:null,trackId:samePerson ? 7 : 9};
+      arena.setPeople([stable],1800);
+      arena.setPeople([stable],1885);
+      assert.deepEqual(onIdentify.mock.calls.map(call => call.arguments),samePerson ? [[7]] : []);
+      assert.equal(send.mock.callCount(),0);
+    });
+  }
+});
+
+test("empty, missed and canceled startup taps cannot score when another body later moves under the finger", async t => {
+  for (const scenario of ["empty", "off target", "pointer cancel", "arena stop", "new round", "cannot spray"]) {
+    await t.test(scenario, subtest => {
+      let armed = true;
+      const { arena, rival, room, send, onIdentify, pointer, token, advance } = startupRound(subtest, () => armed);
+      pointer("pointerdown");
+      pointer(scenario === "pointer cancel" ? "pointercancel" : "pointerup");
+      const frame = token();
+
+      if (scenario === "arena stop") arena.stop();
+
+      if (scenario === "new round") arena.setState({...room,round:2},"self");
+      armed = scenario !== "cannot spray";
+      advance(400);
+      const captured = scenario === "off target" ? {...rival,mask:contestant("rival",0).mask} : rival;
+      arena.setPeople(scenario === "empty" ? [] : [captured],1000,frame);
+      armed = true;
+      arena.setPeople([rival],1400);
+      assert.equal(send.mock.callCount(),0);
+      assert.equal(onIdentify.mock.callCount(),0);
+    });
+  }
+});
+
 test("the impact and recipient feedback use the thrower’s color, including repeat hits", (t) => {
   let draw;
   const impact = [], edge = [];

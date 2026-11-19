@@ -74,11 +74,11 @@ export function createPoseTracks() {
     }
   }
 
-  function update(people, now, width, height, deliveredAt = now) {
+  function update(people, now, width, height, deliveredAt = now, tap = false, repeated = false) {
     // A busy detector can occupy most of the interval between captures. Only
     // extend a continuously visible track if the next capture followed its result.
     const old = tracks.filter(t => now - t.at <= maxGap || (t.visible
-      && now - t.at <= maxSlowGap && now - t.deliveredAt <= 250));
+      && (now - t.at <= maxSlowGap || t.firstTap) && now - t.deliveredAt <= 250));
 
     const boxes = people.map(p => torso(p, width, height));
     const blocked = boxes.map((box, i) => !box || boxes.some((b,j) => i !== j && crowded(box,b)));
@@ -93,14 +93,15 @@ export function createPoseTracks() {
     const next = [];
 
     const result = people.map((person, i) => {
-      if (blocked[i]) return { ...person, trackId:null, id:null };
+      if (blocked[i]) return { ...person, trackId:null, candidateTrackId:null, id:null };
       const j = uniqueBest(costs[i]);
       const prior = j >= 0 && oldChoices[j] === i ? old[j] : null;
-      const seen = prior ? prior.seen + 1 : 1;
-      const solo = people.length === 1 ? (prior?.solo || 0) + 1 : 0;
+      const increment = repeated && prior ? 0 : 1;
+      const seen = (prior?.seen || 0) + increment;
+      const solo = people.length === 1 ? (prior?.solo || 0) + increment : 0;
 
       const track = { trackId:prior?.trackId ?? nextId++, playerId:prior?.playerId ?? null,
-        seen, solo, at:now, deliveredAt, box:boxes[i], visible:true };
+        seen, solo, at:now, deliveredAt, box:boxes[i], visible:true, firstTap:tap && seen === 1 };
 
       if (solo >= 2 && rivals.length === 1 && rivals[0].connected
         && !old.some(t => t.trackId !== track.trackId && t.playerId === rivals[0].id)) {
@@ -109,7 +110,10 @@ export function createPoseTracks() {
 
       next.push(track);
 
-      return { ...person, trackId:seen >= 2 ? track.trackId : null, id:track.playerId };
+      const ambiguous = !prior && costs[i].some(Number.isFinite);
+
+      return { ...person, trackId:seen >= 2 ? track.trackId : null,
+        candidateTrackId:ambiguous ? null : track.trackId, id:track.playerId };
     });
 
     // Bridge isolated missed detections. A merged silhouette or competing match

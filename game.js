@@ -67,7 +67,9 @@ function canIdentify() {
 }
 
 function canSpray() {
-  return canIdentify() && room.startsAt <= serverTime() && room.endsAt > serverTime()
+  return room?.phase === 'playing' && connection.connected && !el('identify').open
+    && (cameraReady || cameraBusy) && video.readyState >= 2 && !!video.srcObject
+    && room.startsAt <= serverTime() && room.endsAt > serverTime()
     && me()?.health > 0 && !me().spectator
 }
 
@@ -99,6 +101,7 @@ el('identify').addEventListener('close', () => { selectedTrack = null })
 
 const arena = createArena({
   video, canvas:el('overlay'), canSpray, canIdentify, onIdentify:chooseName,
+  captureTap: () => tracker.captureTap(),
   send:m => connection.send(m), message:sayArena
 })
 
@@ -265,6 +268,7 @@ function updateClock() {
 
   const hint = !connection.connected ? 'Reconnecting…' : before ? 'Starting in ' + before
     : performance.now() < hintUntil ? arenaMessage
+    : cameraBusy && canSpray() ? 'Tap a rival. Tracking is starting…'
     : !cameraReady && cameraNote ? cameraNote : p?.spectator || !p?.health ? 'Spectating this round'
     : !cameraReady ? 'Open your rear camera to spray.' : ''
 

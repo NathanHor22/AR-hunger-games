@@ -54,8 +54,8 @@
         <form method="dialog"><button class="help-close" aria-label="Close instructions">×</button></form>
         <h2 id="helpTitle">How to play</h2>
         <ol>
-          <li><strong>Pick your ink</strong>Join a room and choose a color. That’s the ink you’ll wear when someone sprays you.</li>
-          <li><strong>Tap to spray</strong>Point your rear camera at a rival. Tap for one burst, or hold and drag across them for a continuous spray. In a group, tap a person to match their name.</li>
+          <li><strong>Pick your color</strong>Each player gets their own color. Every tomato you throw leaves a splat in yours.</li>
+          <li><strong>Tap to throw</strong>Point your rear camera at a rival. Tap for one tomato, or hold and drag to keep throwing. In a group, tap a person to match their name.</li>
           <li><strong>Cover fresh ground</strong>Paint different parts of your rivals to score. The highest score after 90 seconds wins.</li>
         </ol>
       </dialog>
@@ -90,7 +90,7 @@
           <ul id="roster" aria-label="Players in the room"></ul>
           <fieldset class="ink-locker" id="inkLocker" aria-describedby="inkHelp">
             <legend class="section-label">Your ink</legend>
-            <p id="inkHelp">Pick the color that appears on you when you get sprayed.</p>
+            <p id="inkHelp">Your tomatoes splat in this color. Crossed-out colors belong to other players.</p>
             <div class="ink-palette" id="inkPalette"></div>
           </fieldset>
         </section>
@@ -102,7 +102,7 @@
     </section>
 
     <section id="arena" class="screen" aria-label="Live tomato fight">
-      <canvas id="overlay" role="button" tabindex="0" aria-label="Spray a rival. Tap, or hold and drag to paint. Use arrow keys to aim and Space or Enter to spray."></canvas>
+      <canvas id="overlay" role="button" tabindex="0" aria-label="Tap a rival to throw a tomato. Hold and drag to keep throwing. Use arrow keys to aim and Space or Enter to throw."></canvas>
       <dl class="round-hud">
         <div><dt>Your score</dt><dd id="score">0</dd></div>
         <div class="clock-readout"><dt>Time</dt><dd id="clock" role="timer">1:30</dd></div>

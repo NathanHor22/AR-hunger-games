@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { WebSocket } from 'ws';
 import { createGameServer } from './server.js';
+import { inkColors } from './public/ink.js';
 
 
 async function arena(t) {
@@ -58,7 +59,8 @@ async function arena(t) {
 test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rematch', { timeout: 8000 }, async t => {
   const game = await arena(t);
   const green = '#49e066';
-  const a = await game.connect({ type: 'create', name: 'A', color: '#319cff' });
+  const blue = '#319cff';
+  const a = await game.connect({ type: 'create', name: 'A', color: blue });
   const owner = await a.wait(m => m.type === 'welcome');
   const b = await game.connect({ type: 'join', name: 'B', code: owner.code, color: '#a369ff' });
   const peer = await b.wait(m => m.type === 'welcome');
@@ -67,7 +69,8 @@ test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rema
   assert.ok(enrolled.players.every(p => !('descriptor' in p) && !p.ready));
   assert.ok(!JSON.stringify(enrolled).includes(peer.token));
   a.send({ type:'color', color: green });
-  await a.state(r => r.players.every(p => p.color === green));
+  const conflict = await a.wait(m => m.code === 'COLOR_TAKEN');
+  assert.equal(conflict.color, green);
   b.send({ type:'color', color:'invalid' });
   await b.wait(m => m.type === 'error');
   a.send({ type:'start' });
@@ -79,10 +82,12 @@ test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rema
   a.send({type:'sync'});
   await a.state(r => r.phase === 'playing' && r.paintSeq === 0);
   game.advance(3000);
-  a.send(hit('first'));
+  a.send({...hit('first'), color:green, shooterId:peer.playerId});
   const first = await b.wait(m => m.type === 'paint');
   assert.ok(first.score > 0 && first.coverage > 0);
-  assert.equal(first.splat.color, green);
+  assert.equal(first.color, blue);
+  assert.equal(first.splat.color, blue);
+  assert.equal(first.splat.shooterId, owner.playerId);
   a.send(hit('first')); // Exact replays can never score.
   a.send(hit('second'));
   const repeat = await b.wait(m => m.type === 'paint');
@@ -90,6 +95,7 @@ test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rema
   assert.equal(repeat.coverage, first.coverage);
   assert.equal(repeat.hits, 2);
   assert.equal(repeat.splat, undefined);
+  assert.equal(repeat.color, blue);
   a.send(hit('over-budget', 152)); // Only two packets may arrive together.
   a.send({type:'sync'});
   await a.state(r => r.paintSeq === 2);
@@ -121,7 +127,8 @@ test('camera-free entry, rapid coverage scoring, chosen paint, recovery and rema
   assert.deepEqual(result.leaderboard.map(p => p.rank),[1,2]);
   b.send({type:'rematch'});
   const reset = await resumed.state(r => r.phase === 'lobby');
-  assert.ok(reset.players.every(p => !p.splats.length && !p.score && !p.coverage && p.color === green));
+  assert.ok(reset.players.every(p => !p.splats.length && !p.score && !p.coverage));
+  assert.deepEqual(reset.players.map(p => p.color), [blue, green]);
   const intruder = await game.connect({type:'resume', code:owner.code, token:'guess'});
   assert.equal((await intruder.wait(m => m.type === 'error')).code,'INVALID_TOKEN');
 });
@@ -265,6 +272,8 @@ test('a resumed lobby player keeps a chosen color and camera-free start', { time
   const {token,playerId} = await b.wait(m => m.type === 'welcome');
   b.ws.close();
   await a.state(r => r.players.some(p => p.id === playerId && !p.connected));
+  a.send({type:'color',color:'#ff59a3'});
+  await a.wait(m => m.code === 'COLOR_TAKEN');
   a.send({type:'start'});
   await a.wait(m => m.type === 'error');
   const back = await game.connect({type:'resume',code,token});
@@ -272,4 +281,93 @@ test('a resumed lobby player keeps a chosen color and camera-free start', { time
   assert.equal(room.players[1].color,'#ff59a3');
   a.send({type:'start'});
   await back.state(r => r.phase === 'playing');
+});
+
+test('eight seats reserve distinct colors through competing picks, leaving and reconnect grace', { timeout: 6000 }, async t => {
+  const game = await arena(t);
+  const host = await game.connect({type:'create'});
+  const {code,playerId:hostId} = await host.wait(m => m.type === 'welcome');
+  const guest = await game.connect({type:'join',code});
+  const {playerId} = await guest.wait(m => m.type === 'welcome');
+  const cyan = inkColors.find(c => c.name === 'Cyan').hex;
+  host.send({type:'color',color:cyan});
+  guest.send({type:'color',color:cyan});
+  const claimed = await host.state(r => r.players.some(p => p.color === cyan));
+  const loser = claimed.players.find(p => p.color !== cyan);
+  const rejected = await (loser.id === playerId ? guest : host).wait(m => m.code === 'COLOR_TAKEN');
+  assert.equal(rejected.color,cyan);
+  const badJoin = await game.connect({type:'join',code,color:cyan});
+  assert.equal((await badJoin.wait(m => m.type === 'error')).code,'COLOR_TAKEN');
+
+  const others = await Promise.all(Array.from({length:6}, () => game.connect({type:'join',code})));
+  const full = await host.state(r => r.players.length === 8);
+  assert.deepEqual(new Set(full.players.map(p => p.color)),new Set(inkColors.map(c => c.hex)));
+  const guestColor = full.players.find(p => p.id === playerId).color;
+  const ninth = await game.connect({type:'join',code});
+  assert.equal((await ninth.wait(m => m.type === 'error')).code,'ROOM_FULL');
+  guest.ws.close();
+  await host.state(r => r.players.length === 8 && r.players.some(p => p.id === playerId && !p.connected));
+  ninth.send({type:'join',code,color:guestColor});
+  await ninth.wait(m => m.code === 'ROOM_FULL');
+  game.advance(25_001);
+  await host.state(r => r.players.length === 7 && !r.players.some(p => p.id === playerId));
+  ninth.send({type:'join',code});
+  const replacement = await ninth.wait(m => m.type === 'welcome');
+  const filled = await host.state(r => r.players.some(p => p.id === replacement.playerId));
+  assert.equal(filled.players.find(p => p.id === replacement.playerId).color,guestColor);
+  ninth.send({type:'leave'});
+  await ninth.wait(m => m.type === 'left');
+  badJoin.send({type:'join',code,color:guestColor});
+  const {playerId:returningId} = await badJoin.wait(m => m.type === 'welcome');
+  host.send({type:'start'});
+  const started = await host.state(r => r.phase === 'playing');
+  game.advance(3000);
+  const thrown = new Set();
+
+  for (const [i,sender] of [host,...others,badJoin].entries()) {
+    sender.send({type:'spray',round:started.round,targetId:i ? hostId : returningId,shotId:'shot-'+i,anchor:{triangle:i*16,u:.1,v:.45}});
+    const hit = await host.wait(m => m.type === 'paint');
+    assert.equal(hit.color,started.players.find(p => p.id === hit.shooterId).color);
+    assert.equal(hit.splat.color,hit.color);
+    thrown.add(hit.color);
+  }
+
+  assert.equal(thrown.size,8);
+});
+
+test('overpainting changes the visible color without scoring already covered skin', { timeout: 5000 }, async t => {
+  const game = await arena(t);
+  const host = await game.connect({type:'create',color:'#319cff'});
+  const {code} = await host.wait(m => m.type === 'welcome');
+  const green = await game.connect({type:'join',code,color:'#49e066'});
+  const target = await game.connect({type:'join',code,color:'#a369ff'});
+  const {playerId,token} = await target.wait(m => m.type === 'welcome');
+  host.send({type:'start'});
+  const {round} = await host.state(r => r.phase === 'playing');
+  game.advance(3000);
+  const pulse = {type:'spray',round,targetId:playerId,anchor:{triangle:2,u:.1,v:.45}};
+  green.send({...pulse,shotId:'green'});
+  const first = await target.wait(m => m.type === 'paint');
+  assert.equal(first.splat.color,'#49e066');
+  assert.ok(first.score > 0);
+  host.send({...pulse,shotId:'blue',color:'#a369ff'});
+  const overpaint = await target.wait(m => m.type === 'paint');
+  assert.equal(overpaint.color,'#319cff');
+  assert.equal(overpaint.splat.color,'#319cff');
+  assert.equal(overpaint.score,0);
+  assert.equal(overpaint.coverage,first.coverage);
+  host.send({...pulse,shotId:'repeat-blue'});
+  const repeat = await target.wait(m => m.type === 'paint');
+  assert.equal(repeat.splat,undefined);
+  assert.equal(repeat.color,'#319cff');
+  assert.equal(repeat.score,0);
+  const observer = await game.connect({type:'join',code});
+  const watched = await observer.state(r => r.players.some(p => p.spectator));
+  const marks = watched.players.find(p => p.id === playerId).splats;
+  assert.deepEqual(marks.map(s => s.color),['#49e066','#319cff']);
+  target.ws.close();
+  await host.state(r => r.players.some(p => p.id === playerId && !p.connected));
+  const resumed = await game.connect({type:'resume',code,token});
+  const back = await resumed.state(r => r.phase === 'playing');
+  assert.deepEqual(back.players.find(p => p.id === playerId).splats,marks);
 });

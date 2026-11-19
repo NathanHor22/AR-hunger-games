@@ -23,9 +23,9 @@ The Node server serves the site, model, WASM and WebSocket endpoint at `/ws`. Ru
 
 ## Playtest
 
-1. Create a room, then have friends scan the QR and join. Choose the color that appears on your body when another player paints you. Friends can pick the same color.
+1. Create a room, then have friends scan the QR and join. Each seat gets one of eight colors. Choose any available color in the lobby. Your tomatoes and the splats they leave on other players use your color.
 2. Start with two or more connected players. Allow the rear camera when the round opens. In a duel, frame your rival alone. In a group, tap an unnamed person and pick their name. Tag again if the game loses track of who is who.
-3. Tap a rival for one burst, or hold and drag to spray continuously. Aim at different areas of their head, torso, arms and legs. Each previously unpainted area earns points for the first player to cover it.
+3. Tap a rival to throw a tomato, or hold and drag to spray continuously. The latest splat leaves its thrower’s color on the body. Only fresh areas earn points, so aim for unpainted spots on the head, torso, arms and legs.
 4. The percentage above a rival shows how much of them is painted. Your phone shows your score and how much ink is on you. A dropped connection has a 25-second grace period.
 5. At the end, the leaderboard ranks players by fresh coverage points. The host can open a rematch in the same room.
 
@@ -33,7 +33,7 @@ The Node server serves the site, model, WASM and WebSocket endpoint at `/ws`. Ru
 
 Each device processes its camera frames locally. In a two-player round, the sole visible person is assumed to be the rival. Group names are assigned on each phone and followed through position and pose continuity. A prolonged loss of view or an ambiguous crossing can require naming someone again.
 
-The renderer fits articulated surfaces to pose landmarks. Each spray that covers fresh area stores its triangle, two barycentric coordinates, ink color and shape seed. Observers use that anchor to draw the splat on the moving body from their own camera angle. Depth comes from the pose and apparent body size in each camera view.
+The renderer fits articulated surfaces to pose landmarks. Each spray that changes the paint stores its triangle, two barycentric coordinates, ink color and shape seed. Observers use that anchor to draw the splat on the moving body from their own camera angle. Depth comes from the pose and apparent body size in each camera view.
 
 The shooter's browser estimates contact. The server enforces the firing interval and tracks painted cells on each player's body. Peers receive confirmed paint updates, scores and rankings. All rooms are in memory and expire after abandonment. Restarting the server ends active rooms.
 

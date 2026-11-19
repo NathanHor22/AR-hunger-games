@@ -4,6 +4,9 @@ export const inkColors = [
   { name: 'Green', hex: '#49e066' },
   { name: 'Pink', hex: '#ff59a3' },
   { name: 'Orange', hex: '#ff902f' },
+  { name: 'Red', hex: '#ef3440' },
+  { name: 'Yellow', hex: '#ffdb38' },
+  { name: 'Cyan', hex: '#20d8db' },
 ];
 
 export const sprayIntervalMs = 180;
@@ -29,27 +32,28 @@ export function createInkSurface() {
 }
 
 // Rasterize onto a persistent body surface. Cells at the UV seam are neighbors.
-export function addInk(cells, anchor) {
+export function addInk(cells, anchor, colorId) {
   const { part, s, t } = surfaceUV(anchor);
   const [w,h] = grids[part];
   const radius = inkFootprint(part);
   const sx = s*w/8, sy = t*h, rx = radius.s*w/8, ry = radius.t*h;
   const patch = cells[part];
-  let fresh = 0;
+  let fresh = 0, changed = false;
 
   for (let y = Math.max(0, Math.floor(sy-ry)); y < Math.min(h, Math.ceil(sy+ry)); y++) {
     for (let x = Math.floor(sx-rx); x < Math.ceil(sx+rx); x++) {
       if (((x+.5-sx)/rx)**2 + ((y+.5-sy)/ry)**2 > 1) continue;
       const cell = y*w + (x+w)%w;
 
-      if (!patch[cell]) {
-        patch[cell] = 1;
-        fresh++;
-      }
+      if (patch[cell] === colorId) continue;
+
+      if (patch[cell] === 0) fresh++;
+      patch[cell] = colorId;
+      changed = true;
     }
   }
 
-  return fresh;
+  return { fresh, changed };
 }
 
 export function inkStandings(players) {

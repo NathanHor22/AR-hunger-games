@@ -2,6 +2,7 @@ import { makeBody, hitBody, drawPaint } from "./public/body.js";
 import { ownership, clearlyInFront } from "./public/depth.js";
 import { drawNameplates } from "./public/nameplate.js";
 import { sprayIntervalMs } from "./public/ink.js";
+import { drawTomatoProjectile } from "./menu-art.js";
 
 function cover(vw, vh, width, height) {
   const scale = Math.max(width / vw, height / vh);
@@ -153,42 +154,28 @@ function splatSound(audio, frequency, gain) {
 
 // Render fresh paint on the anchored body immediately after the server acknowledges it.
 // The brief local spray animation also makes contact visible during a network round trip.
+const tomatoFlightMs = 110;
+
 function drawSpray(ctx, burst, point, age, width, height, reducedMotion) {
-  const fade = Math.max(0, 1 - age / 290);
-  ctx.save();
-  ctx.fillStyle = burst.color;
-  ctx.strokeStyle = burst.color;
+  const flight = reducedMotion ? 0 : tomatoFlightMs;
 
-  if (!reducedMotion && age < 110) {
-    const progress = age / 110;
+  if (age < flight) {
+    const t = age / flight;
+    const radius = 8 + 20 * (1 - t);
+    const x = width / 2 + (point.x - width / 2) * t;
+    const y = height + (point.y - height) * t - 30 * Math.sin(Math.PI * t);
+    drawTomatoProjectile(ctx, x, y, radius, burst.color);
 
-    const fromX = width * 0.6,
-      fromY = height + 12;
-
-    for (let i = 0; i < 5; i++) {
-      const t = progress * 0.65 + i * 0.105;
-
-      if (t > 1) continue;
-      const x = fromX + (point.x - fromX) * t;
-      const y = fromY + (point.y - fromY) * t;
-      ctx.globalAlpha = 0.54 * t;
-      ctx.beginPath();
-      ctx.ellipse(
-        x,
-        y,
-        2 + (1 - t) * 4,
-        3 + (1 - t) * 7,
-        Math.atan2(fromY - point.y, fromX - point.x) - Math.PI / 2,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-    }
+    return;
   }
 
+  const impactAge = age - flight;
+  const fade = Math.max(0, 1 - impactAge / (290 - flight));
+  ctx.save();
+  ctx.fillStyle = burst.color;
   ctx.globalAlpha = fade * (burst.hit ? 0.92 : 0.52);
   const radius = burst.hit ? burst.radius : 6;
-  const spread = reducedMotion ? 1 : 0.65 + Math.min(1, age / 100) * 0.5;
+  const spread = reducedMotion ? 1 : 0.65 + Math.min(1, impactAge / 100) * 0.5;
 
   if (burst.hit) {
     ctx.beginPath();
@@ -216,7 +203,7 @@ function drawSpray(ctx, burst, point, age, width, height, reducedMotion) {
 
   for (let i = 0; i < 5; i++) {
     const angle = burst.phase + 2.4 * i;
-    const r = radius * (spread + (reducedMotion ? 0.1 : age / 250));
+    const r = radius * (spread + (reducedMotion ? 0.1 : impactAge / 250));
     ctx.beginPath();
     ctx.arc(
       point.x + Math.cos(angle) * r,
@@ -419,7 +406,7 @@ export function createArena({
   }
 
   function emitSpray(point, now, hit) {
-    let color = room.players.find((p) => p.id === myId)?.color || "#fff2d2";
+    const color = room.players.find((p) => p.id === myId)?.color || "#fff2d2";
     let radius = 8;
 
     if (hit) {
@@ -436,7 +423,6 @@ export function createArena({
         })
       )
         return;
-      color = target.player.color;
       radius = Math.max(12, Math.min(34, target.body.radius * 0.34));
     }
 
@@ -532,14 +518,16 @@ export function createArena({
     while (bursts.length && time - bursts[0].at >= 290) bursts.shift();
 
     for (const burst of bursts) {
-      const point = anchoredPoint(fresh(time) ? scene : [], burst);
+      const age = Math.max(0, time - burst.at);
+      const anchor = anchoredPoint(missedAt === Infinity && opacity > 0 ? scene : [], burst);
+      const point = anchor ?? (!motion.matches && age < tomatoFlightMs ? burst : null);
 
       if (point)
         drawSpray(
           ctx,
           burst,
           point,
-          Math.max(0, time - burst.at),
+          age,
           width,
           height,
           motion.matches,
@@ -686,14 +674,14 @@ export function createArena({
     receivePaint(event) {
       if (room?.phase !== "playing" || room.code !== event.code ||
           room.round !== event.round || event.targetId !== myId) return;
-      const me = room.players.find((p) => p.id === myId);
+      const color = event.color ?? event.splat?.color ?? room.players.find((p) => p.id === event.shooterId)?.color;
 
-      if (!me) return;
+      if (!color) return;
       const now = performance.now();
 
       if (now >= inkedUntil) message("You’ve been inked!");
       inkedUntil = now + 1150;
-      inkedColor = me.color;
+      inkedColor = color;
     },
     setPeople(value, capturedAt) {
       const now = performance.now();

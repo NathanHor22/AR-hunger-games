@@ -97,6 +97,10 @@ function error(ws, message, code = 'INVALID_ACTION') {
   send(ws, { type: 'error', message, code });
 }
 
+function colorTaken(ws, color) {
+  send(ws, { type:'error', code:'COLOR_TAKEN', color, message:'That color is taken. Pick an available color.' });
+}
+
 function snapshot(room, now) {
   const players = [...room.players.values()];
 
@@ -163,21 +167,22 @@ function spray(room, player, m, at) {
 
   if (!Number.isInteger(triangle) || triangle < 0 || triangle >= bodyTriangleCount
     || !Number.isFinite(u) || !Number.isFinite(v) || u < 0 || v < 0 || u+v > 1.00001) return;
-  const fresh = addInk(target.cells, { triangle, u, v });
+  // Zero represents bare skin; each palette entry has its own positive cell value.
+  const { fresh, changed } = addInk(target.cells, { triangle, u, v }, palette.indexOf(player.color) + 1);
   let splat;
   player.hits++;
 
-  if (fresh) {
+  if (changed) {
     target.inked += fresh;
     target.coverage = Math.round(target.inked * 1000 / totalInkCells) / 10;
     player.score += fresh;
-    splat = { id: player.id + '-' + m.shotId, shooterId: player.id, color: target.color,
+    splat = { id: player.id + '-' + m.shotId, shooterId: player.id, color: player.color,
       triangle, u, v, scale: 1, seed: randomInt(0x7fffffff) };
     target.splats.push(splat);
   }
 
   const event = { type: 'paint', code: room.code, round: room.round, seq: ++room.paintSeq, serverNow: at,
-    shooterId: player.id, targetId: target.id, score: player.score, hits: player.hits, coverage: target.coverage, splat };
+    shooterId: player.id, color: player.color, targetId: target.id, score: player.score, hits: player.hits, coverage: target.coverage, splat };
 
   for (const member of room.players.values()) send(member.ws, event);
 }
@@ -229,7 +234,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
       if (!room) {
         if (!['create', 'join', 'resume'].includes(m.type)) return error(ws, 'Join a room first');
 
-        if (m.type !== 'resume' && m.color !== undefined && !palette.includes(m.color)) return error(ws, 'Pick one of the five ink colors');
+        if (m.type !== 'resume' && m.color !== undefined && !palette.includes(m.color)) return error(ws, 'Pick a lobby ink color');
         let candidate;
 
         if (m.type === 'create') {
@@ -266,7 +271,7 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
 
           if (candidate.phase === 'lobby') player.ready = false;
         } else {
-          if (candidate.players.size >= 8) return error(ws, 'Room is full', 'ROOM_FULL');
+          if (candidate.players.size >= palette.length) return error(ws, 'Room is full', 'ROOM_FULL');
 
           const name = jsonText(m.name)
             .replace(/[\p{Cc}\p{Cf}]/gu, '')
@@ -274,11 +279,13 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
             .slice(0, 24);
 
           const taken = new Set([...candidate.players.values()].map((p) => p.color));
+
+          if (taken.has(m.color)) return colorTaken(ws, m.color);
           player = {
             id: randomUUID(),
             token: randomBytes(24).toString('hex'),
             name: name || 'Player ' + (candidate.players.size + 1),
-            color: m.color ?? palette.find(c => !taken.has(c)) ?? palette[candidate.players.size % palette.length],
+            color: m.color ?? palette.find(c => !taken.has(c)),
             ready: false,
           };
           resetPlayer(player);
@@ -323,6 +330,13 @@ export function createGameServer({ now = Date.now, tls, socketPath = '/ws' } = {
 
       if (m.type === 'color') {
         if (room.phase !== 'lobby' || !palette.includes(m.color)) return error(ws, 'Pick a lobby ink color');
+
+        if ([...room.players.values()].some(p => p !== player && p.color === m.color)) {
+          colorTaken(ws, m.color);
+
+          return send(ws, { type:'state', room:snapshot(room, at) });
+        }
+
         player.color = m.color;
       } else if (m.type === 'ready') {
         if (room.phase !== 'lobby' || ![true, false].includes(m.ready)) return error(ws, 'Ready up in the lobby');

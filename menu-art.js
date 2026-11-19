@@ -74,30 +74,35 @@ function drawHead(fill, blink) {
   fill(cherry, 'M75 80l1-4 5-1-3 2z M122 66l3-1 3 2-3-1z');
 }
 
-let tomatoSprite;
+const tomatoSprites = new Map();
 
-function tomato() {
-  tomatoSprite ??= plate(34, 32, fill => {
+function tomato(color) {
+  if (tomatoSprites.has(color)) return tomatoSprites.get(color);
+  const shade = (original, mix) => color ? `color-mix(in srgb, ${color}, ${mix})` : original;
+
+  const sprite = plate(34, 32, fill => {
     fill(ink, 'M4 12l4-4 5-1 4 1 3-2 7 1 5 5 1 7-3 7-7 5-6 1-4-2-5-1-6-6-1-6z');
-    fill(plum, 'M5 13l4-3 5-1 4 1 4-2 5 2 4 4-1 8-6 6-7 2-6-2-5-4-3-5z');
-    fill(cherry, 'M5 13l6-4 6 2 7-2 5 4 1 5-5 7-6 2-7-1-7-5-1-4z');
-    fill(red, 'M5 14l5-4 7 2 6-2 5 2 1 5-4 5-8 3-7-2-5-4z');
-    fill(orange, 'M6 15l4-4 6 1-2 2-4 1-3 4z M23 11l5 2 1 3-3-2-4-1z');
+    fill(shade(plum, '#261932 58%'), 'M5 13l4-3 5-1 4 1 4-2 5 2 4 4-1 8-6 6-7 2-6-2-5-4-3-5z');
+    fill(shade(cherry, '#261932 28%'), 'M5 13l6-4 6 2 7-2 5 4 1 5-5 7-6 2-7-1-7-5-1-4z');
+    fill(color || red, 'M5 14l5-4 7 2 6-2 5 2 1 5-4 5-8 3-7-2-5-4z');
+    fill(shade(orange, 'white 34%'), 'M6 15l4-4 6 1-2 2-4 1-3 4z M23 11l5 2 1 3-3-2-4-1z');
     fill(cream, 'M7 15l3-3 3 1-3 2-1 2H7z M6 18h2v2H6z');
-    fill(peach, 'M10 20h2v2h-2z');
+    fill(shade(peach, 'white 55%'), 'M10 20h2v2h-2z');
     fill(ink, 'M12 10L7 7l6-1-1-5 6 5 2-5 5-1-3 7 7-1-4 5-6 1-3 4-1-4-6 1z');
     fill(pine, 'M12 8l4 1-2-5 4 4 4-6-2 7 6-2-4 4-4-1-2 4-1-3-4 1z');
     fill(leaf, 'M10 7l6 1 1 2-4-1z M19 8l2-6 2-1-2 6z M18 10l7-3-4 3z');
     fill(lime, 'M15 4l2 2v2z M20 6l2-5h1l-2 5z');
   });
 
-  return tomatoSprite;
+  tomatoSprites.set(color, sprite);
+
+  return sprite;
 }
 
-export function drawTomatoProjectile(ctx, x, y, radius) {
+export function drawTomatoProjectile(ctx, x, y, radius, color) {
   ctx.save();
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(tomato(), x - radius, y - radius, radius * 2, radius * 2);
+  ctx.drawImage(tomato(color), x - radius, y - radius, radius * 2, radius * 2);
   ctx.restore();
 }
 

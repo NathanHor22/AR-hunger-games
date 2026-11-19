@@ -71,19 +71,18 @@ test("camera cover crops each axis around the center without distorting the body
   assert.deepEqual(landscape[0], { x: 0.25, y: 0, z: 0.1 });
 });
 
-test("a released tap can settle once from slow inference; loss, changed identity, cancel and timeout discard it", (t) => {
-  let now = 1000;
-  t.mock.method(performance, "now", () => now);
-
+function arenaCanvas(t, ctx = {}, globals = {}) {
   const canvas = Object.assign(new EventTarget(), {
-    clientWidth:320, clientHeight:480, getContext:() => ({}),
-    getBoundingClientRect:() => ({left:0, top:0}), setPointerCapture() {},
+    clientWidth:320, clientHeight:480, getContext:() => ctx,
+    getBoundingClientRect:() => ({left:0, top:0, right:320, bottom:480}), setPointerCapture() {},
   });
 
   const browser = { window:new EventTarget(), matchMedia:() => ({matches:false}),
     document:Object.assign(new EventTarget(), {
-      createElement:() => canvas, querySelector:() => canvas, getElementById:() => canvas,
-    }) };
+      createElement:() => canvas,
+      querySelector:() => ({ getBoundingClientRect:() => ({left:4,top:4,right:110,bottom:32}) }),
+      getElementById:() => ({ getBoundingClientRect:() => ({left:246,top:4,right:316,bottom:32}) }),
+    }), ...globals };
 
   for (const [key, value] of Object.entries(browser)) {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, key);
@@ -91,6 +90,13 @@ test("a released tap can settle once from slow inference; loss, changed identity
     t.after(() => { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; });
   }
 
+  return canvas;
+}
+
+test("a released tap can settle once from slow inference; loss, changed identity, cancel and timeout discard it", (t) => {
+  let now = 1000;
+  t.mock.method(performance, "now", () => now);
+  const canvas = arenaCanvas(t);
   const person = { ...contestant("rival"), id:"rival", trackId:1 };
   const sprays = [], identified = [];
 
@@ -151,6 +157,51 @@ test("a released tap can settle once from slow inference; loss, changed identity
   pointer("pointerup");
   assert.deepEqual(identified, [1]);
   assert.equal(sprays.length, 1);
+});
+
+test("the impact and recipient feedback use the thrower’s color, including repeat hits", (t) => {
+  let draw;
+  const impact = [], edge = [];
+
+  const ctx = {
+    setTransform() {}, clearRect() {}, drawImage() {}, save() {}, restore() {}, beginPath() {},
+    moveTo() {}, lineTo() {}, closePath() {}, stroke() {}, arc() {}, ellipse() {}, fillText() {},
+    measureText: () => ({width:50}),
+    fill() { impact.push(this.fillStyle); },
+    fillRect(x,y,w) { if (x === 0 && y === 0 && w === 6) edge.push(this.fillStyle); },
+  };
+
+  const canvas = arenaCanvas(t,ctx,{
+    devicePixelRatio:1,
+    requestAnimationFrame(fn) {
+      draw = fn;
+
+      return 1;
+    },
+  });
+
+  t.mock.method(performance, "now", () => 1000);
+  const target = { ...contestant("rival"), id:"rival", trackId:1 };
+  const self = {id:"self",name:"Blue",color:"#319cff",splats:[]};
+  Object.assign(target.player,{name:"Green",color:"#49e066",splats:[]});
+  const room = {phase:"playing", code:"123456", round:1, players:[self,target.player]};
+  const arena = createArena({video:{videoWidth:640,videoHeight:480},canvas,send:() => true,canSpray:() => true,message() {}});
+  arena.setState(room,self.id);
+  arena.setPeople([target],1000);
+  arena.start();
+  canvas.dispatchEvent(Object.assign(new Event("pointerdown"),{pointerId:1,isPrimary:true,button:0,clientX:140,clientY:186}));
+  canvas.dispatchEvent(Object.assign(new Event("pointerup"),{pointerId:1}));
+  draw(1150);
+  assert.ok(impact.includes(self.color));
+  assert.ok(!impact.includes(target.player.color));
+
+  arena.setState(room,target.id);
+  const hit = {code:room.code,round:1,targetId:target.id,shooterId:self.id,color:self.color};
+  arena.receivePaint({...hit,splat:{color:self.color}});
+  draw(1160);
+  arena.receivePaint(hit);
+  draw(1170);
+  assert.deepEqual(edge,[self.color,self.color]);
 });
 
 test("contact needs a visible triangle and matching silhouette in uncropped camera space", () => {

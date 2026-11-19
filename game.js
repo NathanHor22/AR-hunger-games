@@ -126,7 +126,7 @@ async function openCamera() {
     if (epoch !== cameraEpoch || !started) return
     cameraReady = true
 
-    if (!me()?.spectator) sayArena('Tap a rival to spray. Hold and drag to cover more.')
+    if (!me()?.spectator) sayArena('Tap to throw a tomato. Hold and drag to cover more.')
   } catch (error) {
     if (epoch !== cameraEpoch) return
     tracker.stop()
@@ -223,10 +223,18 @@ function renderLobby() {
   el('roster').replaceChildren(...room.players.map(p => playerRow(p,null,
     p.connected ? inkColors.find(c => c.hex === p.color)?.name : 'Reconnecting')))
 
-  for (const radio of el('inkPalette').querySelectorAll('input')) radio.checked = radio.value === (pendingColor || me()?.color)
+  const owners = new Map(room.players.map(p => [p.color, p]))
+
+  for (const radio of el('inkPalette').querySelectorAll('input')) {
+    const owner = owners.get(radio.value)
+    radio.disabled = !!owner && owner.id !== myId
+    radio.checked = radio.value === (pendingColor || me()?.color)
+    radio.parentElement.title = radio.disabled ? 'Taken by ' + owner.name : ''
+  }
+
   el('inkLocker').disabled = !connection.connected
   const online = room.players.filter(p => p.connected).length
-  showText('rosterCount', online + ' / 8')
+  showText('rosterCount', online + ' / ' + inkColors.length)
   showText('lobbyStatus', !connection.connected ? 'Reconnecting to the room…' : online < 2
     ? 'Invite a second player to start.' : host ? 'Your crew is in. Start when you’re ready.' : 'Waiting for the host to start.')
   el('startRound').hidden = !host
@@ -306,7 +314,7 @@ const connection = createConnection({
     room = next
     timeOffset = next.serverNow - Date.now()
 
-    if (pendingColor === me()?.color || room.phase !== 'lobby') pendingColor = null
+    if (room.phase !== 'lobby' || room.players.some(p => p.color === pendingColor)) pendingColor = null
 
     if (pendingColor && !colorSent) colorSent = connection.send({type:'color',color:pendingColor})
     tracker.setRoster(room.players,myId)

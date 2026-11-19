@@ -65,7 +65,7 @@
 #cameraRetryLive { width: fit-content; min-height: 44px; font-size: 1.1rem; }
 #overlay { cursor: crosshair; user-select: none; -webkit-tap-highlight-color: transparent; }
 #overlay:focus-visible { outline: 2px dashed var(--gold); outline-offset: -4px; }
-#coverage { color: var(--player-ink, var(--cream)); }
+#score { color: var(--player-ink, var(--cream)); }
 .relabel-key {
   min-height: 44px; padding: .35rem .8rem; border: 1px solid #9581a7;
   color: var(--cream); background: #231a31e8; font: bold .72rem var(--pixel-font);
